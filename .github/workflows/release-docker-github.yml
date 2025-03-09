@@ -1,4 +1,4 @@
-name: "Release : Docker"
+name: "Release : Docker (GitHub)"
 
 on:
   # Triggered manually
