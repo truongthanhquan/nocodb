@@ -303,13 +303,15 @@
     "extension": "תוסף",
     "extensions": "תוספים",
     "enable": "מופעל",
+    "disable": "Disable",
     "poweredBy": "מופעל ע״י",
     "nocoAI": "Noco AI",
     "you": "אתה",
     "read": "נקרא",
     "unread": "לא נקרא",
     "shared": "Shared",
-    "organization": "Organization"
+    "organization": "Organization",
+    "all": "All"
   },
   "objects": {
     "script": "Script",
@@ -369,7 +371,7 @@
       "orgLevelCreator": "יוצר ברמת הארגון",
       "orgLevelViewer": "צופה ברמת הארגון"
     },
-    "sqlVIew": "תצוגת SQL",
+    "sqlView": "תצוגת SQL",
     "rowHeight": "גובה רשומה",
     "heightClass": {
       "short": "נמוך",
@@ -679,7 +681,8 @@
     "customUrl": "כתובת URL מותאמת אישית",
     "viewSettingsCantBeChangedWhenViewIs": "View settings can't be changed when the view is {type}.",
     "youAreLeavingNocoDB": "You’re leaving NocoDB",
-    "onlyProceedIfYouTrustThisLink": "Only proceed if you trust this link."
+    "onlyProceedIfYouTrustThisLink": "Only proceed if you trust this link.",
+    "reAssignViewModalSubtitle": "Once reassigned, current owner will no longer be able to edit the view configuration."
   },
   "labels": {
     "latitude": "Latitude",
@@ -888,6 +891,7 @@
     "clickToCopyViewID": "לחץ כדי להעתיק את מזהה התצוגה",
     "viewMode": "מצב תצוגה",
     "reAssignView": "הקצה מחדש תצוגה",
+    "reAssignThisView": "Re-assign this view",
     "searchUsers": "חפש משתמשים",
     "superAdmin": "מנהל מערכת",
     "allTables": "כל הטבלאות",
@@ -1131,7 +1135,9 @@
     "showJsonPayload": "Show JSON payload",
     "autoCreateMissingSelectionOptions": "Auto create missing select field options",
     "fillForm": "Fill Form",
-    "proceedToLink": "Proceed to link"
+    "proceedToLink": "Proceed to link",
+    "currentOwner": "Current owner",
+    "newOwner": "New owner"
   },
   "activity": {
     "clickToResolve": "לחץ כדי לפתור",
@@ -1465,7 +1471,10 @@
     "aiIntegrationReConfigure": "אפשרות תאריך נוכחי אינה זמינה עבור מקור הנתונים או סוג הנתונים",
     "aiIntegrationAddAndReConfigure": "האינטגרציה של AI הוסרה, הוסף מחדש וחדש את הקונפיגורציה מתוך תיבת העריכה של השדה כדי להפעיל את התכונות של NocoAI",
     "generateFieldDataUsingAiButtonOption": "יצירת ערך למספר שדות בטבלה זו תוך שימוש במידע רשומה ו-NocoAI",
-    "sourceDataIsReadonly": "הנתונים המקוריים הם לקריאה בלבד"
+    "sourceDataIsReadonly": "הנתונים המקוריים הם לקריאה בלבד",
+    "schemaChangeDisabledFormSqlView": "Schema editing is disabled for this SQL View.",
+    "shiftSpace": "Shift + Space",
+    "expandShiftSpace": "Expand 'Shift + Space'"
   },
   "placeholder": {
     "searchIcons": "חפש אייקונים",
@@ -1524,9 +1533,11 @@
     "inviteYourTeam": "הזמן את הצוות שלך",
     "inviteYourTeamLabel": "שפר את שיתוף הפעולה והיציבות עם הצוות שלך - התחל על ידי הזמנתם להצטרף למרחב העבודה שלך.",
     "searchOptions": "אפשרויות חיפוש",
-    "lockViewDescription": "הסבר מדוע אתה נועל תצוגה זו. הודעה זו תוצג כאשר מישהו ינסה לפתוח את תצוגה זו (אופציונלי)."
+    "lockViewDescription": "הסבר מדוע אתה נועל תצוגה זו. הודעה זו תוצג כאשר מישהו ינסה לפתוח את תצוגה זו (אופציונלי).",
+    "noBaseUsersFound": "No base users found"
   },
   "msg": {
+    "urlFilter": "URL filters are applied from URL parameters and combine with view filters set via the toolbar.",
     "urlFilterError": "Invalid URL filter. Ignored as it could not be applied.",
     "dropYourDocHere": "גרור את המסמך שלך כאן",
     "airtableImportSuccess": "יובא בהצלחה ממסד Airtable.",
@@ -1868,7 +1879,8 @@
       "yourCurrentRoleIs": "התפקיד הנוכחי שלך הוא",
       "pleaseRequestAccessForView": "אנא בקש הרשאה גבוהה יותר ממנהל / בעל הבסיס / בעל המרחב עבודה כדי לקבל גישה ל-{viewName} הזה",
       "preventHideAllOptions": "לא ניתן להסתיר את כל האפשרויות אם השדה נדרש",
-      "valueMustBeAtMostCharLong": "הערך יכול להכיל לכל היותר {length} תווים"
+      "valueMustBeAtMostCharLong": "הערך יכול להכיל לכל היותר {length} תווים",
+      "copyToClipboardLocalFileUrl": "Browser doesn’t allow to load local resource directly. URL copied to clipboard instead."
     },
     "error": {
       "manualTriggerHook": "לא ניתן להשבית ווים ידניים",

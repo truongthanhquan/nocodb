@@ -1,4 +1,10 @@
-import { ButtonActionsType, ColumnReqType, ColumnType, TableType } from './Api';
+import {
+  ButtonActionsType,
+  ColumnReqType,
+  ColumnType,
+  LinkToAnotherRecordType,
+  TableType,
+} from './Api';
 import { FormulaDataTypes } from './formulaHelpers';
 import { LongTextAiMetaProp, RelationTypes } from '~/lib/globals';
 import { parseProp } from './helperFunctions';
@@ -315,6 +321,18 @@ export function isLinksOrLTAR(
   );
 }
 
+export function isSelfLinkCol(
+  col: ColumnType & { colOptions: unknown }
+): boolean {
+  return (
+    isLinksOrLTAR(col) &&
+    col.system &&
+    // except has-many all other relation types are self link
+    // has-many system column get created to mm table only
+    (col.colOptions as LinkToAnotherRecordType)?.type !== RelationTypes.HAS_MANY
+  );
+}
+
 export const getEquivalentUIType = ({
   formulaColumn,
 }: {
@@ -531,3 +549,35 @@ export const durationOptions = [
     regex: /(\d+)?(?::(\d+))?(?::(\d+))?(?:.(\d{0,4})?)?/,
   },
 ];
+
+/**
+ * Checks if a given column is read-only.
+ * A column is considered read-only if it belongs to specific UI types
+ * (e.g., Lookup, Rollup, Formula, etc.) or if it represents system-generated
+ * metadata such as created/modified timestamps or ordering information.
+ *
+ * @param {ColumnType} column - The column to check.
+ * @returns {boolean} - Returns `true` if the column is read-only, otherwise `false`.
+ */
+export const isReadOnlyColumn = (column: ColumnType): boolean => {
+  return (
+    // Check if the column belongs to a predefined set of read-only UI types
+    [
+      UITypes.Lookup,
+      UITypes.Rollup,
+      UITypes.Formula,
+      UITypes.Button,
+      UITypes.Barcode,
+      UITypes.QrCode,
+      UITypes.ForeignKey,
+    ].includes(column.uidt as UITypes) ||
+    // Check if the column is a system-generated user tracking field (CreatedBy, LastModifiedBy)
+    isCreatedOrLastModifiedByCol(column) ||
+    // Check if the column is a system-generated timestamp field (CreatedTime, LastModifiedTime)
+    isCreatedOrLastModifiedTimeCol(column) ||
+    // Check if the column is used for row ordering
+    isOrderCol(column) ||
+    // if primary key and auto generated then treat as readonly
+    (column.pk && (column.ai || parseProp(column.meta)?.ag))
+  );
+};

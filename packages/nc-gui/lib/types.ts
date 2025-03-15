@@ -467,6 +467,7 @@ interface CellRenderer {
     imageLoader: ImageWindowLoader
     cellRenderStore: CellRenderStore
     isPublic?: boolean
+    openDetachedExpandedForm: (props: UseExpandedFormDetachedProps) => void
   }) => Promise<boolean>
   handleKeyDown?: (options: {
     e: KeyboardEvent
@@ -573,6 +574,8 @@ type CanvasEditEnabledType = {
   fixed: boolean
 } | null
 
+type CanvasCellEventDataInjType = ExtractInjectedReactive<typeof CanvasCellEventDataInj>
+
 export type {
   User,
   ProjectMetaInfo,
@@ -620,4 +623,5 @@ export type {
   CanvasEditEnabledType,
   SetCursorType,
   CursorType,
+  CanvasCellEventDataInjType,
 }
