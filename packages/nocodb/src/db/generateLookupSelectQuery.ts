@@ -16,7 +16,7 @@ import formulaQueryBuilderv2 from '~/db/formulav2/formulaQueryBuilderv2';
 import genRollupSelectv2 from '~/db/genRollupSelectv2';
 import { getAliasGenerator } from '~/utils';
 import { NcError } from '~/helpers/catchError';
-import { getAs } from '~/db/BaseModelSqlv2';
+import { getAs } from '~/helpers/dbHelpers';
 
 const LOOKUP_VAL_SEPARATOR = '___';
 
@@ -358,17 +358,16 @@ export default async function generateLookupSelectQuery({
         case UITypes.Formula:
           {
             const builder = (
-              await formulaQueryBuilderv2(
-                baseModelSqlv2,
-                (
+              await formulaQueryBuilderv2({
+                baseModel: baseModelSqlv2,
+                tree: (
                   await lookupColumn.getColOptions<FormulaColumn>(context)
                 ).formula,
-                null,
                 model,
-                lookupColumn,
-                await model.getAliasColMapping(context),
-                prevAlias,
-              )
+                column: lookupColumn,
+                aliasToColumn: await model.getAliasColMapping(context),
+                tableAlias: prevAlias,
+              })
             ).builder;
 
             selectQb.select(
