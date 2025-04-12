@@ -44,6 +44,9 @@ jobs:
     runs-on: ubuntu-22.04
     env:
       working-directory: ./packages/nocodb
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Setup pnpm
         uses: pnpm/action-setup@v4
