@@ -14,6 +14,14 @@ on:
         options:
           - DEV
           - PROD
+      isDaily:
+        description: "Is daily build"
+        required: false
+        type: choice
+        options:
+          - Y
+          - N
+
   # Triggered by release-nocodb.yml / release-nightly-dev.yml / release-pr.yml
   workflow_call:
     inputs:
@@ -94,6 +102,19 @@ jobs:
         run: |
           export NODE_OPTIONS="--max_old_space_size=16384"
           NOCODB_SDK_PKG_NAME=nocodb-sdk-daily
+          targetEnv=${{ github.event.inputs.targetEnv || inputs.targetEnv }} targetVersion=${{ github.event.inputs.tag || inputs.tag }} node scripts/bumpNocodbSdkVersion.js &&
+          pnpm --filter=${NOCODB_SDK_PKG_NAME} install --ignore-scripts --no-frozen-lockfile --ignore-workspace && pnpm --filter=${NOCODB_SDK_PKG_NAME} run build &&
+          targetEnv=${{ github.event.inputs.targetEnv || inputs.targetEnv }} node scripts/upgradeNocodbSdk.js &&
+          targetEnv=${{ github.event.inputs.targetEnv || inputs.targetEnv }} targetVersion=${{ github.event.inputs.tag || inputs.tag }} node scripts/bumpNcGuiVersion.js &&
+          pnpm --filter=nc-gui install --ignore-scripts --no-frozen-lockfile &&
+          targetEnv=${{ github.event.inputs.targetEnv || inputs.targetEnv }} targetVersion=${{ github.event.inputs.tag || inputs.tag }} pnpm --filter=nc-gui run build:copy &&
+          targetEnv=${{ github.event.inputs.targetEnv || inputs.targetEnv }} node scripts/upgradeNcGui.js
+
+      - name: upgrade packages for local or pr build
+        if: ${{ github.event.inputs.targetEnv != 'DEV' && inputs.targetEnv != 'DEV' }}
+        run: |
+          export NODE_OPTIONS="--max_old_space_size=16384"
+          NOCODB_SDK_PKG_NAME=nocodb-sdk
           targetEnv=${{ github.event.inputs.targetEnv || inputs.targetEnv }} targetVersion=${{ github.event.inputs.tag || inputs.tag }} node scripts/bumpNocodbSdkVersion.js &&
           pnpm --filter=${NOCODB_SDK_PKG_NAME} install --ignore-scripts --no-frozen-lockfile --ignore-workspace && pnpm --filter=${NOCODB_SDK_PKG_NAME} run build &&
           targetEnv=${{ github.event.inputs.targetEnv || inputs.targetEnv }} node scripts/upgradeNocodbSdk.js &&
