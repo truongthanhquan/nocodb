@@ -121,15 +121,29 @@ jobs:
               || echo "Label '$LABEL_NAME' already exists or failed to create (non-critical, will proceed)."
           done
       - name: Create Pull Request
-        id: cpr
-        uses: repo-sync/pull-request@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        uses: peter-evans/create-pull-request@v6
         with:
+          github_token: ${{ github.token }}
+          pr_title: "Sync: ${{ env.UPSTREAM_OWNER_REPO }}/${{ env.UPSTREAM_BRANCH_NAME }} (${{ env.SHORT_UPSTREAM_SHA }}) to ${{ env.TARGET_BRANCH_IN_FORK }}"
+          pr_body: |
+            This PR was automatically created by a GitHub Action to sync this fork with the upstream repository.
+      
+            **Upstream Details:**
+            - Repository: `${{ env.UPSTREAM_OWNER_REPO }}` (`${{ env.UPSTREAM_REPO_URL }}`)
+            - Branch: `${{ env.UPSTREAM_BRANCH_NAME }}`
+            - Commit SHA: `${{ env.UPSTREAM_COMMIT_SHA }}` (Short: `${{ env.SHORT_UPSTREAM_SHA }}`)
+      
+            **Fork Details:**
+            - Target Branch (Base): `${{ env.TARGET_BRANCH_IN_FORK }}`
+            - New Sync Branch (Head): `${{ env.NEW_BRANCH_NAME_ENV }}`
+      
+            Please review the changes and merge if appropriate.
           source_branch: ${{ env.NEW_BRANCH_NAME_ENV }}
           destination_branch: ${{ env.TARGET_BRANCH_IN_FORK }}
-          title: "Sync: ${{ env.UPSTREAM_OWNER_REPO }}/${{ env.UPSTREAM_BRANCH_NAME }} (${{ env.SHORT_UPSTREAM_SHA }}) to ${{ env.TARGET_BRANCH_IN_FORK }}"
-          pr_label: 'Bot: Automerge'
+          pr_label: |
+            upstream-sync
+            automated-pr
+          pr_draft: false
           
       - name: Notify on Failure (Optional)
         if: failure()
