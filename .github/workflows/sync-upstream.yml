@@ -122,9 +122,8 @@ jobs:
           done
       - name: Create Pull Request
         uses: repo-sync/pull-request@v2
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         with:
+          github_token: ${{ secrets.GITHUB_TOKEN }}
           pr_title: "Sync: ${{ env.UPSTREAM_OWNER_REPO }}/${{ env.UPSTREAM_BRANCH_NAME }} (${{ env.SHORT_UPSTREAM_SHA }}) to ${{ env.TARGET_BRANCH_IN_FORK }}"
           pr_body: |
             This PR was automatically created by a GitHub Action to sync this fork with the upstream repository.
