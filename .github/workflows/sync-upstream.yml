@@ -174,7 +174,7 @@ jobs:
       - name: Create Pull Request
         if: env.SYNC_NEEDED == 'true'
         env:
-          GH_TOKEN: ${{ secrets.MY_PAT }}
+          GITHUB_TOKEN: ${{ secrets.MY_PAT }}
         run: |
           gh pr create \
             --title "Sync: ${{ env.UPSTREAM_OWNER_REPO }}/${{ env.UPSTREAM_BRANCH_NAME }} (${{ env.SHORT_UPSTREAM_SHA }}) to ${{ env.TARGET_BRANCH_IN_FORK }}" \
