@@ -23,83 +23,35 @@ jobs:
   sync_and_pr:
     runs-on: ubuntu-latest
     permissions:
-      contents: write      # To create the new branch on the fork (via gh api or git push)
-      pull-requests: write # To create the pull request in the fork (via gh pr create)
+      contents: write      # For creating branches/refs AND labels
+      pull-requests: write # For creating pull requests
 
     steps:
-      - name: Checkout Forked Repository
-        uses: actions/checkout@v4
-        with:
-          fetch-depth: 0 # Fetches all history, crucial for dealing with divergent branches
-
-      - name: Set up Git User (Good practice, though gh api/pr create might not always need it)
-        run: |
-          git config user.name "${{ github.actor }}"
-          git config user.email "${{ github.actor_id}}+${{ github.actor }}@users.noreply.github.com"
-
-      - name: Define Variables
-        id: vars
-        run: |
-          echo "UPSTREAM_REPO_URL=${{ github.event.inputs.upstream_repo_url }}" >> $GITHUB_ENV
-          echo "UPSTREAM_BRANCH_NAME=${{ github.event.inputs.upstream_branch_name }}" >> $GITHUB_ENV
-          echo "TARGET_BRANCH_IN_FORK=${{ github.event.inputs.target_branch_in_fork }}" >> $GITHUB_ENV
-          # Extract upstream owner/repo for logging or other gh commands if ever needed
-          UPSTREAM_OWNER_REPO=$(echo "${{ github.event.inputs.upstream_repo_url }}" | sed 's|https://github.com/||; s|\.git$||')
-          echo "UPSTREAM_OWNER_REPO=${UPSTREAM_OWNER_REPO}" >> $GITHUB_ENV
-
-
-      - name: Add Upstream Remote
-        run: git remote add upstream ${{ env.UPSTREAM_REPO_URL }}
-
-      - name: Fetch Specific Upstream Branch
-        id: fetch_upstream
-        run: |
-          echo "Fetching upstream/${{ env.UPSTREAM_BRANCH_NAME }} from ${{ env.UPSTREAM_REPO_URL }}..."
-          git fetch upstream ${{ env.UPSTREAM_BRANCH_NAME }} --verbose
-          echo "Fetched upstream/${{ env.UPSTREAM_BRANCH_NAME }}."
-          
-          UPSTREAM_COMMIT_SHA=$(git rev-parse "upstream/${{ env.UPSTREAM_BRANCH_NAME }}")
-          if [ -z "$UPSTREAM_COMMIT_SHA" ]; then
-            echo "::error::Could not resolve SHA for upstream/${{ env.UPSTREAM_BRANCH_NAME }} after fetch."
-            exit 1
-          fi
-          echo "SHA of fetched upstream/${{ env.UPSTREAM_BRANCH_NAME }} is: $UPSTREAM_COMMIT_SHA"
-          echo "UPSTREAM_COMMIT_SHA=${UPSTREAM_COMMIT_SHA}" >> $GITHUB_ENV
-          echo "upstream_commit_sha=${UPSTREAM_COMMIT_SHA}" >> $GITHUB_OUTPUT
+      # ... (Checkout, Set up Git User, Define Variables, Add Upstream, Fetch Upstream, Create Branch) ...
 
       - name: Create Branch on Fork Remote via GitHub API
         id: create_remote_branch
+        # ... (your existing step) ...
+        # This step should output 'new_branch_name' and set 'NEW_BRANCH_NAME_ENV'
+
+      # 👇 ADD THIS STEP HERE
+      - name: Ensure Labels Exist in Fork
         env:
           GH_TOKEN: ${{ github.token }}
-          # UPSTREAM_COMMIT_SHA is already in GITHUB_ENV from the previous step
         run: |
-          # Sanitize upstream branch name for use in the new branch name (e.g., replace slashes if any)
-          SANITIZED_UPSTREAM_BRANCH_NAME=$(echo "${{ env.UPSTREAM_BRANCH_NAME }}" | tr '/' '-')
-          NEW_BRANCH_NAME="sync-${SANITIZED_UPSTREAM_BRANCH_NAME}-$(date +%Y%m%d%H%M%S)"
-          
-          echo "Attempting to create remote branch '${NEW_BRANCH_NAME}' on repository '${{ github.repository }}' pointing to SHA ${{ env.UPSTREAM_COMMIT_SHA }}..."
+          echo "Ensuring label 'upstream-sync' exists..."
+          gh label create "upstream-sync" \
+            --repo "${{ github.repository }}" \
+            --description "Pull request to sync with upstream repository" \
+            --color "1D76DB" \
+            || echo "Label 'upstream-sync' already exists or failed to create (non-critical, will proceed)."
 
-          # Use gh api to create the ref (branch)
-          # The `GH_TOKEN` with `contents: write` permission allows this.
-          CREATE_OUTPUT=$(gh api \
-            --method POST \
-            "/repos/${{ github.repository }}/git/refs" \
-            -f ref="refs/heads/${NEW_BRANCH_NAME}" \
-            -f sha="${{ env.UPSTREAM_COMMIT_SHA }}" \
-            --silent || echo "CREATE_FAILED") # Capture output or failure marker
-
-          if [[ "$CREATE_OUTPUT" == "CREATE_FAILED" ]] || ! gh api "/repos/${{ github.repository }}/git/ref/heads/${NEW_BRANCH_NAME}" --silent > /dev/null; then
-            echo "::error::Failed to create or verify branch '${NEW_BRANCH_NAME}' on remote via API."
-            echo "API call output (if any): $CREATE_OUTPUT"
-            # Attempt to get more info on failure for debugging if possible
-            gh api "/repos/${{ github.repository }}/git/ref/heads/${NEW_BRANCH_NAME}" --verbose || true
-            exit 1
-          else
-            echo "Successfully created and verified remote branch '${NEW_BRANCH_NAME}' on ${{ github.repository }}."
-          fi
-          
-          echo "new_branch_name=${NEW_BRANCH_NAME}" >> $GITHUB_OUTPUT
-          echo "NEW_BRANCH_NAME_ENV=${NEW_BRANCH_NAME}" >> $GITHUB_ENV # For use in gh pr create
+          echo "Ensuring label 'automated-pr' exists..."
+          gh label create "automated-pr" \
+            --repo "${{ github.repository }}" \
+            --description "Pull request generated automatically by GitHub Actions" \
+            --color "0E8A16" \
+            || echo "Label 'automated-pr' already exists or failed to create (non-critical, will proceed)."
 
       - name: Create Pull Request using GitHub CLI
         env:
@@ -131,10 +83,7 @@ jobs:
             --head "${{ env.NEW_BRANCH_NAME_ENV }}" \
             --title "$PR_TITLE" \
             --body "$PR_BODY" \
-            --label "upstream-sync,automated-pr"
-            # Add --draft if you want draft PRs
-            # Add --assignee "@me" or specific users
-            # Add --reviewer "user1,user2"
+            --label "upstream-sync,automated-pr" # This should now work
             
           echo "Pull request creation process initiated for branch '${{ env.NEW_BRANCH_NAME_ENV }}' into '${{ env.TARGET_BRANCH_IN_FORK }}'."
 
