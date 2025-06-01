@@ -1,0 +1,82 @@
+name: Sync Fork with Upstream and Create PR
+
+on:
+  schedule:
+    # Runs daily at 00:00 UTC. You can adjust the schedule as needed.
+    # See https://crontab.guru/ for cron schedule expressions.
+    - cron: '0 0 * * *'
+  workflow_dispatch: # Allows manual triggering of the workflow
+
+jobs:
+  sync_and_pr:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write      # To push the new branch
+      pull-requests: write # To create the pull request
+
+    steps:
+      - name: Checkout Forked Repository
+        uses: actions/checkout@v4
+        with:
+          # We need to fetch all history for all branches and tags
+          # to ensure we can create a PR from the upstream branch.
+          fetch-depth: 0
+          # It's good practice to use a PAT with repo scope for actions
+          # that push to the repository or create PRs, especially if default GITHUB_TOKEN
+          # permissions are restricted.
+          # token: ${{ secrets.YOUR_PAT_WITH_REPO_SCOPE }} # Optional: if GITHUB_TOKEN isn't enough
+
+      - name: Set up Git User
+        run: |
+          git config user.name "${{ github.actor }}"
+          git config user.email "${{ github.actor }}@users.noreply.github.com"
+
+      - name: Define Upstream Repository URL
+        id: upstream_repo
+        run: echo "url=https://github.com/nocodb/nocodb.git" >> $GITHUB_OUTPUT
+
+      - name: Add Upstream Remote
+        run: git remote add upstream ${{ steps.upstream_repo.outputs.url }}
+
+      - name: Fetch Upstream Master
+        run: |
+          git fetch upstream master
+          echo "Fetched upstream/master"
+
+      - name: Create Local Branch from Upstream Master
+        id: upstream_branch_name
+        run: |
+          # Create a unique branch name for the PR to avoid conflicts if PR already exists
+          BRANCH_NAME="sync-upstream-$(date +%Y%m%d%H%M%S)"
+          git checkout -b "$BRANCH_NAME" upstream/master
+          git push origin "$BRANCH_NAME"
+          echo "name=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          echo "Created and pushed branch $BRANCH_NAME from upstream/master"
+
+      - name: Create Pull Request
+        uses: peter-evans/create-pull-request@v6
+        with:
+          # If you used a PAT in the checkout step, you might need to pass it here too.
+          # token: ${{ secrets.YOUR_PAT_WITH_REPO_SCOPE }}
+          commit-message: "chore: Sync with upstream nocodb/master"
+          title: "Sync with upstream nocodb/master (${{ steps.upstream_branch_name.outputs.name }})"
+          body: |
+            This PR was automatically created by a GitHub Action to sync this fork's `master` branch with the latest changes from `upstream/master` (nocodb/nocodb).
+
+            **Upstream Commit:** `upstream/master`
+            **Source Branch in Fork:** `${{ steps.upstream_branch_name.outputs.name }}`
+
+            Please review the changes and merge if appropriate.
+          branch: ${{ steps.upstream_branch_name.outputs.name }} # The branch containing the upstream changes
+          base: master # The branch to merge into in your fork
+          labels: |
+            upstream-sync
+            automated-pr
+          draft: false # Set to true if you want draft PRs
+          # Optional: Assignees and Reviewers
+          # assignees: your-github-username
+          # reviewers: your-github-username,another-reviewer
+
+      - name: Notify on Failure (Optional)
+        if: failure()
+        run: echo "::error::Failed to sync with upstream and create PR."
