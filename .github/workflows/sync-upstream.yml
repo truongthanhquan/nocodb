@@ -120,31 +120,36 @@ jobs:
               --color "$LABEL_COLOR" \
               || echo "Label '$LABEL_NAME' already exists or failed to create (non-critical, will proceed)."
           done
+
       - name: Create Pull Request
-        uses: repo-sync/pull-request@v2
-        env:
-          GH_TOKEN: ${{ github.token }}
+        uses: peter-evans/create-pull-request@v7
         with:
-          pr_title: "Sync: ${{ env.UPSTREAM_OWNER_REPO }}/${{ env.UPSTREAM_BRANCH_NAME }} (${{ env.SHORT_UPSTREAM_SHA }}) to ${{ env.TARGET_BRANCH_IN_FORK }}"
-          pr_body: |
+          token: ${{ secrets.GITHUB_TOKEN }} # Uses the default GITHUB_TOKEN
+          #commit-message: "chore: Sync from upstream ${{ env.UPSTREAM_OWNER_REPO }}/${{ env.UPSTREAM_BRANCH_NAME }} (${{ env.SHORT_UPSTREAM_SHA }})"
+          title: "Sync: ${{ env.UPSTREAM_OWNER_REPO }}/${{ env.UPSTREAM_BRANCH_NAME }} (${{ env.SHORT_UPSTREAM_SHA }}) to ${{ env.TARGET_BRANCH_IN_FORK }}"
+          body: |
             This PR was automatically created by a GitHub Action to sync this fork with the upstream repository.
-      
+
             **Upstream Details:**
             - Repository: `${{ env.UPSTREAM_OWNER_REPO }}` (`${{ env.UPSTREAM_REPO_URL }}`)
             - Branch: `${{ env.UPSTREAM_BRANCH_NAME }}`
             - Commit SHA: `${{ env.UPSTREAM_COMMIT_SHA }}` (Short: `${{ env.SHORT_UPSTREAM_SHA }}`)
-      
+
             **Fork Details:**
             - Target Branch (Base): `${{ env.TARGET_BRANCH_IN_FORK }}`
             - New Sync Branch (Head): `${{ env.NEW_BRANCH_NAME_ENV }}`
-      
+
             Please review the changes and merge if appropriate.
-          source_branch: ${{ env.NEW_BRANCH_NAME_ENV }}
-          destination_branch: ${{ env.TARGET_BRANCH_IN_FORK }}
-          pr_label: |
+            This sync branch was created directly from the upstream commit.
+          branch: ${{ env.NEW_BRANCH_NAME_ENV }} # The new branch pushed to the fork
+          base: ${{ env.TARGET_BRANCH_IN_FORK }}   # The branch in your fork to merge into
+          labels: |
             upstream-sync
             automated-pr
-          pr_draft: false
+          draft: false
+          delete-branch: true
+          # assignees: user1,user2 # Optional
+          # reviewers: user1,user2 # Optional
           
       - name: Notify on Failure (Optional)
         if: failure()
