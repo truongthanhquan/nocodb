@@ -121,7 +121,6 @@ jobs:
               || echo "Label '$LABEL_NAME' already exists or failed to create (non-critical, will proceed)."
           done
       - name: Create Pull Request
-        if: ${{ github.event.inputs.targetEnv == 'PROD' || inputs.targetEnv == 'PROD' }}
         id: cpr
         uses: repo-sync/pull-request@v2
         env:
