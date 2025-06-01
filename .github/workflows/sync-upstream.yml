@@ -121,14 +121,26 @@ jobs:
               || echo "Label '$LABEL_NAME' already exists or failed to create (non-critical, will proceed)."
           done
       - name: Create Pull Request
-        if: env.SYNC_NEEDED == 'true'
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ github.token }}
-          title: "Sync Fork: ${{ env.UPSTREAM_BRANCH_NAME }} → ${{ env.TARGET_BRANCH_IN_FORK }}"
-          body: "Automated sync PR from upstream `${{ env.UPSTREAM_BRANCH_NAME }}` (commit `${{ env.SHORT_UPSTREAM_SHA }}`) into fork branch `${{ env.TARGET_BRANCH_IN_FORK }}`."
-          base: ${{ env.TARGET_BRANCH_IN_FORK }}
+          commit-message: "chore: Sync from upstream ${{ env.UPSTREAM_OWNER_REPO }}/${{ env.UPSTREAM_BRANCH_NAME }} (${{ env.SHORT_UPSTREAM_SHA }})"
+          title: "Sync: ${{ env.UPSTREAM_OWNER_REPO }}/${{ env.UPSTREAM_BRANCH_NAME }} (${{ env.SHORT_UPSTREAM_SHA }}) to ${{ env.TARGET_BRANCH_IN_FORK }}"
+          body: |
+            This PR was automatically created by a GitHub Action to sync this fork with the upstream repository.
+      
+            **Upstream Details:**
+            - Repository: `${{ env.UPSTREAM_OWNER_REPO }}` (`${{ env.UPSTREAM_REPO_URL }}`)
+            - Branch: `${{ env.UPSTREAM_BRANCH_NAME }}`
+            - Commit SHA: `${{ env.UPSTREAM_COMMIT_SHA }}` (Short: `${{ env.SHORT_UPSTREAM_SHA }}`)
+      
+            **Fork Details:**
+            - Target Branch (Base): `${{ env.TARGET_BRANCH_IN_FORK }}`
+            - New Sync Branch (Head): `${{ env.NEW_BRANCH_NAME_ENV }}`
+      
+            Please review the changes and merge if appropriate.
           branch: ${{ env.NEW_BRANCH_NAME_ENV }}
+          base: ${{ env.TARGET_BRANCH_IN_FORK }}
           labels: |
             upstream-sync
             automated-pr
