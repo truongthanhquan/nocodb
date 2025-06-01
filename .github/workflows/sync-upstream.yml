@@ -142,7 +142,7 @@ jobs:
           This sync branch was created directly from the upstream commit." \
             --head "${{ env.NEW_BRANCH_NAME_ENV }}" \
             --base "${{ env.TARGET_BRANCH_IN_FORK }}" \
-            --label "upstream-sync" \
+            # --label "upstream-sync" \
             --label "automated-pr"
 
 
