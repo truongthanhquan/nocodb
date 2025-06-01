@@ -43,13 +43,40 @@ jobs:
           git fetch upstream master
           echo "Fetched upstream/master"
 
-      - name: Create Local Branch from Upstream Master
+      - name: Create and Push Branch from Upstream Master
         id: upstream_branch_name
         run: |
-          # Create a unique branch name for the PR to avoid conflicts if PR already exists
+          echo "Attempting to create branch from upstream/master..."
+          # Log the specific commit SHA of the fetched upstream/master
+          # This ensures we know what commit 'upstream/master' was pointing to after the fetch.
+          UPSTREAM_MASTER_SHA=$(git rev-parse refs/remotes/upstream/master)
+          echo "SHA of refs/remotes/upstream/master (nocodb/nocodb/master) is: ${UPSTREAM_MASTER_SHA}"
+
+          # Create a unique branch name for the PR to avoid conflicts if a PR already exists
           BRANCH_NAME="sync-upstream-$(date +%Y%m%d%H%M%S)"
-          git checkout -b "$BRANCH_NAME" upstream/master
+          
+          # Create the new branch explicitly from the remote-tracking branch 'refs/remotes/upstream/master'.
+          # This is more specific than just 'upstream/master' and avoids potential ambiguity.
+          git checkout -b "$BRANCH_NAME" "refs/remotes/upstream/master"
+          
+          # Verify the new branch's commit SHA
+          NEW_BRANCH_SHA=$(git rev-parse HEAD) # HEAD now points to the new branch
+          echo "SHA of new branch (${BRANCH_NAME}) HEAD is: ${NEW_BRANCH_SHA}"
+
+          if [ "${UPSTREAM_MASTER_SHA}" != "${NEW_BRANCH_SHA}" ]; then
+            echo "::error:: Mismatch! New branch HEAD SHA (${NEW_BRANCH_SHA}) does not match refs/remotes/upstream/master SHA (${UPSTREAM_MASTER_SHA})."
+            echo "This indicates the new branch was not correctly created from the intended upstream commit."
+            # You could optionally cause the workflow to fail here if this check fails:
+            # exit 1 
+          else
+            echo "Success: New branch ${BRANCH_NAME} correctly created from refs/remotes/upstream/master."
+          fi
+          
+          # Push the new branch (containing upstream changes) to your fork (origin)
           git push origin "$BRANCH_NAME"
+          echo "Pushed branch $BRANCH_NAME to origin."
+          
+          # Output the branch name for use in the next step
           echo "name=$BRANCH_NAME" >> $GITHUB_OUTPUT
           echo "Created and pushed branch $BRANCH_NAME from upstream/master"
 
@@ -63,12 +90,12 @@ jobs:
           body: |
             This PR was automatically created by a GitHub Action to sync this fork's `master` branch with the latest changes from `upstream/master` (nocodb/nocodb).
 
-            **Upstream Commit:** `upstream/master`
-            **Source Branch in Fork:** `${{ steps.upstream_branch_name.outputs.name }}`
+            **Upstream Commit Ref:** `refs/remotes/upstream/master`
+            **Source Branch in Fork (Head of PR):** `${{ steps.upstream_branch_name.outputs.name }}`
 
             Please review the changes and merge if appropriate.
           branch: ${{ steps.upstream_branch_name.outputs.name }} # The branch containing the upstream changes
-          base: master # The branch to merge into in your fork
+          base: master # The branch to merge into in your fork (your fork's master branch)
           labels: |
             upstream-sync
             automated-pr
@@ -80,3 +107,4 @@ jobs:
       - name: Notify on Failure (Optional)
         if: failure()
         run: echo "::error::Failed to sync with upstream and create PR."
+
