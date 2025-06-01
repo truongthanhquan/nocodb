@@ -6,28 +6,23 @@ name: Sync Fork from Upstream (Create PR)
 on:
   workflow_dispatch:
     inputs:
-      upstream_repo_owner:
-        description: "Owner of the upstream repository (e.g., original-owner)"
-        required: true
-      upstream_repo_name:
-        description: "Name of the upstream repository (e.g., original-repo)"
-        required: true
+      # upstream_repo_owner and upstream_repo_name are now hardcoded below
       upstream_branch:
-        description: "Branch in the upstream repository to sync changes from (e.g., main, master, develop)"
+        description: "Branch in the upstream repository (nocodb/nocodb) to sync changes from (e.g., main, master, develop)"
         required: true
-        default: "main"
+        default: "master" # Default changed to master
       fork_target_branch:
         description: "Target branch in this fork to merge upstream changes into (e.g., main, master, develop)"
         required: true
-        default: "main"
+        default: "master" # Default changed to master
       pr_title:
         description: "Title for the Pull Request"
         required: true
-        default: "Sync changes from upstream repository"
+        default: "Sync changes from upstream nocodb/nocodb"
       pr_body:
         description: "Body content for the Pull Request (optional)"
         required: false
-        default: "This PR syncs changes from the upstream repository to keep this fork up-to-date."
+        default: "This PR syncs changes from the upstream repository (nocodb/nocodb) to keep this fork up-to-date."
 
 # Define permissions required by the job.
 # GITHUB_TOKEN needs to read contents (for checkout) and write pull-requests.
@@ -54,12 +49,15 @@ jobs:
         env:
           # GITHUB_TOKEN is automatically provided by GitHub Actions
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Upstream repository owner and name are now hardcoded
+          UPSTREAM_REPO_OWNER: "nocodb"
+          UPSTREAM_REPO_NAME: "nocodb"
           # Construct the full upstream repository name (owner/repo)
-          UPSTREAM_FULL_REPO: "${{ github.event.inputs.upstream_repo_owner }}/${{ github.event.inputs.upstream_repo_name }}"
+          UPSTREAM_FULL_REPO: "nocodb/nocodb" # Hardcoded
           # The branch in the upstream repository that is the source of changes
           UPSTREAM_SOURCE_BRANCH: ${{ github.event.inputs.upstream_branch }}
           # The head of the PR, in "owner:branch" format, pointing to the upstream
-          PR_HEAD_REF: "${{ github.event.inputs.upstream_repo_owner }}:${{ github.event.inputs.upstream_branch }}"
+          PR_HEAD_REF: "nocodb:${{ github.event.inputs.upstream_branch }}" # Hardcoded owner
           # The repository where the PR will be created (your current forked repository)
           FORK_REPO_FULL_NAME: ${{ github.repository }}
           # The base branch in your fork where changes will be merged
@@ -69,7 +67,7 @@ jobs:
           PR_BODY: ${{ github.event.inputs.pr_body }}
         run: |
           echo "Attempting to create a Pull Request in fork: ${FORK_REPO_FULL_NAME}"
-          echo "  from Upstream Repository Branch: ${UPSTREAM_FULL_REPO}:${UPSTREAM_SOURCE_BRANCH} (Head: ${PR_HEAD_REF})"
+          echo "  from Upstream Repository Branch: ${UPSTREAM_FULL_REPO}:${UPSTREAM_SOURCE_BRANCH} (Head: ${PR_HEAD_REF})" # UPSTREAM_FULL_REPO is now hardcoded
           echo "  to Fork Branch (Base): ${FORK_TARGET_BRANCH}"
           echo "  PR Title: \"${PR_TITLE}\""
 
