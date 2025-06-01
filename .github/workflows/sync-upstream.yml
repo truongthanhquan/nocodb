@@ -141,7 +141,6 @@ jobs:
         run: |
           # Construct PR title and body
           PR_TITLE="Sync fork: ${{ env.UPSTREAM_BRANCH_NAME }} from ${{ env.UPSTREAM_OWNER_REPO }} into branch ${{ env.NEW_BRANCH_NAME_ENV }}"
-          # Using NEW_BRANCH_NAME_ENV in title makes it more unique if upstream commit hasn't changed but action reruns
           
           PR_BODY=$(cat <<EOF
           This PR was automatically created by a GitHub Action to sync this fork with the upstream repository.
@@ -163,8 +162,28 @@ jobs:
           echo "Base branch: ${{ env.TARGET_BRANCH_IN_FORK }}"
           echo "Head branch: ${{ env.NEW_BRANCH_NAME_ENV }} (on repository: ${{ github.repository }})"
 
+          # Ensure the local reference to the target branch on origin is up-to-date for accurate comparison
+          echo "Fetching target branch '${{ env.TARGET_BRANCH_IN_FORK }}' from origin to ensure it's up-to-date for comparison."
+          git fetch origin "${{ env.TARGET_BRANCH_IN_FORK }}":refs/remotes/origin/"${{ env.TARGET_BRANCH_IN_FORK }}" --force || \
+            echo "::warning::Failed to fetch target branch ${{ env.TARGET_BRANCH_IN_FORK }} from origin. It might not exist or there was a network issue. Comparison might be inaccurate."
+
+          # Check if the upstream commit (which is what our new branch is based on) introduces new changes
+          # compared to the target branch in our fork.
+          # `git merge-base --is-ancestor <commit1> <commit2>` returns 0 if commit1 is an ancestor of commit2.
+          # If UPSTREAM_COMMIT_SHA is an ancestor of origin/TARGET_BRANCH_IN_FORK, then no new changes are introduced by this sync.
+          echo "Checking if upstream commit ${{ env.UPSTREAM_COMMIT_SHA }} introduces new changes compared to origin/${{ env.TARGET_BRANCH_IN_FORK }}..."
+          if git merge-base --is-ancestor "${{ env.UPSTREAM_COMMIT_SHA }}" "origin/${{ env.TARGET_BRANCH_IN_FORK }}"; then
+            echo "Upstream commit ${{ env.UPSTREAM_COMMIT_SHA }} (basis for branch ${{ env.NEW_BRANCH_NAME_ENV }}) is already an ancestor of or identical to origin/${{ env.TARGET_BRANCH_IN_FORK }}."
+            echo "No new changes to create a pull request for. Skipping PR creation."
+            # Optionally, delete the pushed sync branch if no PR is created to keep the fork clean
+            # echo "Deleting remote branch ${{ env.NEW_BRANCH_NAME_ENV }} as no PR will be created."
+            # git push origin --delete "${{ env.NEW_BRANCH_NAME_ENV }}"
+            exit 0 # Exit successfully as no action is needed
+          else
+            echo "New changes detected. Proceeding with PR creation."
+          fi
+
           # Check if a PR already exists for this new branch to the target branch
-          # This prevents creating duplicate PRs if the action re-runs on the same state.
           # The head branch includes the owner: `OWNER:BRANCH_NAME`
           HEAD_BRANCH_FOR_CHECK="${{ github.repository_owner }}:${{ env.NEW_BRANCH_NAME_ENV }}"
           
@@ -181,10 +200,11 @@ jobs:
             echo "Skipping PR creation."
           else
             echo "No existing open PR found. Creating a new one."
+            # Use explicit owner:branch for head to be absolutely clear
             PR_CREATE_OUTPUT=$(gh pr create \
               --repo "${{ github.repository }}" \
               --base "${{ env.TARGET_BRANCH_IN_FORK }}" \
-              --head "${{ env.NEW_BRANCH_NAME_ENV }}" \
+              --head "${{ github.repository_owner }}:${{ env.NEW_BRANCH_NAME_ENV }}" \
               --title "$PR_TITLE" \
               --body "$PR_BODY" \
               --label "upstream-sync,automated-pr" 2>&1) # Capture output for logging
