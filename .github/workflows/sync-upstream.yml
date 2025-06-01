@@ -141,8 +141,8 @@ jobs:
 
             Please review the changes and merge if appropriate.
             This sync branch was created directly from the upstream commit.
-          branch: ${{ env.NEW_BRANCH_NAME_ENV }} # The new branch pushed to the fork
-          base: ${{ env.TARGET_BRANCH_IN_FORK }}   # The branch in your fork to merge into
+          branch: ${{ env.TARGET_BRANCH_IN_FORK }}   # The branch in your fork to merge into
+          base: ${{ env.NEW_BRANCH_NAME_ENV }} # The new branch pushed to the fork
           labels: |
             upstream-sync
             automated-pr
