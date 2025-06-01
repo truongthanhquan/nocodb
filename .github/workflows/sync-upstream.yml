@@ -2,119 +2,142 @@ name: Sync Fork with Upstream and Create PR
 
 on:
   schedule:
-    # Runs daily at 00:00 UTC. You can adjust the schedule as needed.
-    # See https://crontab.guru/ for cron schedule expressions.
+    # Runs daily at 00:00 UTC. You can adjust as needed.
     - cron: '0 0 * * *'
-  workflow_dispatch: # Allows manual triggering of the workflow
+  workflow_dispatch: # Allows manual triggering
+    inputs:
+      upstream_repo_url:
+        description: 'Full URL of the upstream repository (e.g., https://github.com/nocodb/nocodb.git)'
+        required: true
+        default: 'https://github.com/nocodb/nocodb.git'
+      upstream_branch_name:
+        description: 'Upstream branch to sync from (e.g., master, main, develop)'
+        required: true
+        default: 'master'
+      target_branch_in_fork:
+        description: 'Target branch in your fork to create the PR against (e.g., master, main)'
+        required: true
+        default: 'master'
 
 jobs:
   sync_and_pr:
     runs-on: ubuntu-latest
     permissions:
-      contents: write      # To push the new branch to the fork
-      pull-requests: write # To create the pull request in the fork
+      contents: write      # To create the new branch on the fork (via gh api or git push)
+      pull-requests: write # To create the pull request in the fork (via gh pr create)
 
     steps:
       - name: Checkout Forked Repository
         uses: actions/checkout@v4
         with:
-          # Fetch all history for all branches and tags.
-          # This is crucial for correctly interacting with upstream branches.
-          fetch-depth: 0
-          # Optional: If GITHUB_TOKEN's default permissions are restricted,
-          # you might need a Personal Access Token (PAT) with 'repo' scope.
-          # token: ${{ secrets.YOUR_PAT_WITH_REPO_SCOPE }}
+          fetch-depth: 0 # Fetches all history, crucial for dealing with divergent branches
 
-      - name: Set up Git User
+      - name: Set up Git User (Good practice, though gh api/pr create might not always need it)
         run: |
           git config user.name "${{ github.actor }}"
           git config user.email "${{ github.actor_id}}+${{ github.actor }}@users.noreply.github.com"
 
-      - name: Define Upstream Repository URL
-        id: upstream_repo
-        run: echo "url=https://github.com/nocodb/nocodb.git" >> $GITHUB_OUTPUT
+      - name: Define Variables
+        id: vars
+        run: |
+          echo "UPSTREAM_REPO_URL=${{ github.event.inputs.upstream_repo_url }}" >> $GITHUB_ENV
+          echo "UPSTREAM_BRANCH_NAME=${{ github.event.inputs.upstream_branch_name }}" >> $GITHUB_ENV
+          echo "TARGET_BRANCH_IN_FORK=${{ github.event.inputs.target_branch_in_fork }}" >> $GITHUB_ENV
+          # Extract upstream owner/repo for logging or other gh commands if ever needed
+          UPSTREAM_OWNER_REPO=$(echo "${{ github.event.inputs.upstream_repo_url }}" | sed 's|https://github.com/||; s|\.git$||')
+          echo "UPSTREAM_OWNER_REPO=${UPSTREAM_OWNER_REPO}" >> $GITHUB_ENV
+
 
       - name: Add Upstream Remote
-        run: git remote add upstream ${{ steps.upstream_repo.outputs.url }}
+        run: git remote add upstream ${{ env.UPSTREAM_REPO_URL }}
 
-      - name: Fetch Upstream Master
+      - name: Fetch Specific Upstream Branch
+        id: fetch_upstream
         run: |
-          echo "Fetching upstream/master from ${{ steps.upstream_repo.outputs.url }}..."
-          git fetch upstream master --verbose
-          echo "Fetched upstream/master."
-          # Verify that upstream/master ref exists and get its SHA
-          UPSTREAM_HEAD_SHA=$(git rev-parse upstream/master)
-          if [ -z "$UPSTREAM_HEAD_SHA" ]; then
-            echo "::error::Could not resolve SHA for upstream/master after fetch. Upstream remote or branch might be incorrect."
+          echo "Fetching upstream/${{ env.UPSTREAM_BRANCH_NAME }} from ${{ env.UPSTREAM_REPO_URL }}..."
+          git fetch upstream ${{ env.UPSTREAM_BRANCH_NAME }} --verbose
+          echo "Fetched upstream/${{ env.UPSTREAM_BRANCH_NAME }}."
+          
+          UPSTREAM_COMMIT_SHA=$(git rev-parse "upstream/${{ env.UPSTREAM_BRANCH_NAME }}")
+          if [ -z "$UPSTREAM_COMMIT_SHA" ]; then
+            echo "::error::Could not resolve SHA for upstream/${{ env.UPSTREAM_BRANCH_NAME }} after fetch."
             exit 1
           fi
-          echo "SHA of fetched upstream/master is: $UPSTREAM_HEAD_SHA"
-
-      - name: Create and Push Branch from Upstream Master
-        id: sync_details # Renamed id for clarity as it provides more than just branch name
-        run: |
-          # Get the commit SHA of the fetched upstream/master.
-          # This will be used in the PR body and for verification.
-          UPSTREAM_COMMIT_SHA=$(git rev-parse upstream/master)
-          echo "Target upstream commit (upstream/master): ${UPSTREAM_COMMIT_SHA}"
-          
-          # Make the upstream commit SHA available to subsequent steps via environment variables.
+          echo "SHA of fetched upstream/${{ env.UPSTREAM_BRANCH_NAME }} is: $UPSTREAM_COMMIT_SHA"
           echo "UPSTREAM_COMMIT_SHA=${UPSTREAM_COMMIT_SHA}" >> $GITHUB_ENV
+          echo "upstream_commit_sha=${UPSTREAM_COMMIT_SHA}" >> $GITHUB_OUTPUT
 
-          # Create a unique branch name for the PR, incorporating a timestamp.
-          BRANCH_NAME="sync-upstream-$(date +%Y%m%d%H%M%S)"
-          echo "Attempting to create new branch '${BRANCH_NAME}' from upstream/master..."
-
-          # Create the new branch directly from the fetched 'upstream/master'.
-          # This command checks out 'upstream/master' and creates a new branch from it in one step.
-          git checkout -b "$BRANCH_NAME" upstream/master
+      - name: Create Branch on Fork Remote via GitHub API
+        id: create_remote_branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # UPSTREAM_COMMIT_SHA is already in GITHUB_ENV from the previous step
+        run: |
+          # Sanitize upstream branch name for use in the new branch name (e.g., replace slashes if any)
+          SANITIZED_UPSTREAM_BRANCH_NAME=$(echo "${{ env.UPSTREAM_BRANCH_NAME }}" | tr '/' '-')
+          NEW_BRANCH_NAME="sync-${SANITIZED_UPSTREAM_BRANCH_NAME}-$(date +%Y%m%d%H%M%S)"
           
-          # Verify that the new branch's HEAD matches the upstream master's commit SHA.
-          NEW_BRANCH_HEAD_SHA=$(git rev-parse HEAD) # HEAD now points to the new local branch
-          echo "SHA of new branch ('${BRANCH_NAME}') HEAD is: ${NEW_BRANCH_HEAD_SHA}"
+          echo "Attempting to create remote branch '${NEW_BRANCH_NAME}' on repository '${{ github.repository }}' pointing to SHA ${{ env.UPSTREAM_COMMIT_SHA }}..."
 
-          if [ "${UPSTREAM_COMMIT_SHA}" != "${NEW_BRANCH_HEAD_SHA}" ]; then
-            echo "::error:: Mismatch after creating branch! New branch HEAD SHA (${NEW_BRANCH_HEAD_SHA}) does not match target upstream SHA (${UPSTREAM_COMMIT_SHA})."
-            exit 1 
+          # Use gh api to create the ref (branch)
+          # The `GH_TOKEN` with `contents: write` permission allows this.
+          CREATE_OUTPUT=$(gh api \
+            --method POST \
+            "/repos/${{ github.repository }}/git/refs" \
+            -f ref="refs/heads/${NEW_BRANCH_NAME}" \
+            -f sha="${{ env.UPSTREAM_COMMIT_SHA }}" \
+            --silent || echo "CREATE_FAILED") # Capture output or failure marker
+
+          if [[ "$CREATE_OUTPUT" == "CREATE_FAILED" ]] || ! gh api "/repos/${{ github.repository }}/git/ref/heads/${NEW_BRANCH_NAME}" --silent > /dev/null; then
+            echo "::error::Failed to create or verify branch '${NEW_BRANCH_NAME}' on remote via API."
+            echo "API call output (if any): $CREATE_OUTPUT"
+            # Attempt to get more info on failure for debugging if possible
+            gh api "/repos/${{ github.repository }}/git/ref/heads/${NEW_BRANCH_NAME}" --verbose || true
+            exit 1
           else
-            echo "Success: New branch '${BRANCH_NAME}' correctly created from upstream/master (commit ${UPSTREAM_COMMIT_SHA})."
+            echo "Successfully created and verified remote branch '${NEW_BRANCH_NAME}' on ${{ github.repository }}."
           fi
           
-          # Push the new branch (which contains the upstream changes) to your fork (origin).
-          echo "Pushing branch '${BRANCH_NAME}' to origin (your fork)..."
-          git push origin "$BRANCH_NAME"
-          echo "Pushed branch '${BRANCH_NAME}' to origin."
-          
-          # Output the new branch name for use in the pull request step.
-          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
-          # Output the upstream SHA as well, in case it's needed directly by a step output (though GITHUB_ENV is often cleaner)
-          echo "upstream_sha_output=$UPSTREAM_COMMIT_SHA" >> $GITHUB_OUTPUT
+          echo "new_branch_name=${NEW_BRANCH_NAME}" >> $GITHUB_OUTPUT
+          echo "NEW_BRANCH_NAME_ENV=${NEW_BRANCH_NAME}" >> $GITHUB_ENV # For use in gh pr create
 
+      - name: Create Pull Request using GitHub CLI
+        env:
+          GH_TOKEN: ${{ github.token }}
+          # UPSTREAM_COMMIT_SHA from fetch_upstream step env
+          # NEW_BRANCH_NAME_ENV from create_remote_branch step env
+          # UPSTREAM_OWNER_REPO from vars step env
+        run: |
+          PR_TITLE="Sync fork: ${{ env.UPSTREAM_BRANCH_NAME }} from ${{ env.UPSTREAM_OWNER_REPO }} into ${{ env.NEW_BRANCH_NAME_ENV }}"
+          PR_BODY=$(cat <<EOF
+          This PR was automatically created by a GitHub Action to sync this fork.
 
-      - name: Create Pull Request
-        uses: peter-evans/create-pull-request@v6
-        with:
-          # If you used a PAT in the checkout step, you might need to pass it here too.
-          # token: ${{ secrets.YOUR_PAT_WITH_REPO_SCOPE }}
-          commit-message: "chore: Sync with upstream nocodb/master"
-          title: "Sync with upstream nocodb/master (Branch: ${{ steps.sync_details.outputs.branch_name }})"
-          body: |
-            This PR was automatically created by a GitHub Action to sync this fork's `master` branch with the latest changes from `upstream/master` (nocodb/nocodb).
+          **Target in this Fork:** \`${{ env.TARGET_BRANCH_IN_FORK }}\`
+          **Source of changes (Upstream):** \`${{ env.UPSTREAM_OWNER_REPO }}\` branch \`${{ env.UPSTREAM_BRANCH_NAME }}\`
+          **Upstream Commit SHA:** \`${{ env.UPSTREAM_COMMIT_SHA }}\`
+          **New branch in this Fork (Head of this PR):** \`${{ env.NEW_BRANCH_NAME_ENV }}\`
 
-            **Upstream Commit:** `${{ env.UPSTREAM_COMMIT_SHA }}`
-            **Source Branch in Fork (Head of this PR):** `${{ steps.sync_details.outputs.branch_name }}`
+          Please review the changes and merge if appropriate.
+          EOF
+          )
 
-            Please review the changes and merge if appropriate.
-          branch: ${{ steps.sync_details.outputs.branch_name }} # The branch containing the upstream changes (e.g., sync-upstream-YYYYMMDDHHMMSS)
-          base: master # The branch in your fork to merge into (e.g., your fork's master or main branch)
-          labels: |
-            upstream-sync
-            automated-pr
-          draft: false # Set to true if you want draft PRs
-          # Optional: Assignees and Reviewers
-          # assignees: your-github-username
-          # reviewers: your-github-username,another-reviewer
+          echo "Attempting to create PR: '${PR_TITLE}'"
+          echo "Base: ${{ env.TARGET_BRANCH_IN_FORK }}"
+          echo "Head: ${{ env.NEW_BRANCH_NAME_ENV }}"
+
+          gh pr create \
+            --repo "${{ github.repository }}" \
+            --base "${{ env.TARGET_BRANCH_IN_FORK }}" \
+            --head "${{ env.NEW_BRANCH_NAME_ENV }}" \
+            --title "$PR_TITLE" \
+            --body "$PR_BODY" \
+            --label "upstream-sync,automated-pr"
+            # Add --draft if you want draft PRs
+            # Add --assignee "@me" or specific users
+            # Add --reviewer "user1,user2"
+            
+          echo "Pull request creation process initiated for branch '${{ env.NEW_BRANCH_NAME_ENV }}' into '${{ env.TARGET_BRANCH_IN_FORK }}'."
 
       - name: Notify on Failure (Optional)
         if: failure()
-        run: echo "::error::Workflow failed to sync with upstream and create PR."
+        run: echo "::error::Workflow failed during the sync and PR creation process. Check logs for details."
