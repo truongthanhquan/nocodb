@@ -41,8 +41,8 @@ jobs:
       - name: Define Workflow Variables
         id: define_vars
         run: |
-          # For workflow_dispatch, use inputs. For scheduled, use defaults from input block.
-          # GitHub Actions expressions handle null inputs from scheduled runs correctly with '||'
+          # For workflow_dispatch, inputs are used (or their defaults if not provided by user).
+          # For scheduled runs, github.event.inputs will be empty/null, so the '|| env.VAR_DEFAULT' part kicks in.
           CURRENT_UPSTREAM_REPO_URL="${{ github.event.inputs.upstream_repo_url || env.UPSTREAM_REPO_URL_DEFAULT }}"
           echo "UPSTREAM_REPO_URL=$CURRENT_UPSTREAM_REPO_URL" >> $GITHUB_ENV
 
@@ -66,10 +66,10 @@ jobs:
           echo "Defined TARGET_BRANCH_IN_FORK: $CURRENT_TARGET_BRANCH"
           echo "Parsed UPSTREAM_OWNER_REPO: $UPSTREAM_OWNER_REPO_VAL"
         env:
-          # Set defaults here to be referenced if inputs are not provided (e.g., during scheduled runs)
+          # These env vars serve as defaults for scheduled runs, or if inputs somehow bypass 'required: true' with defaults.
           UPSTREAM_REPO_URL_DEFAULT: 'https://github.com/nocodb/nocodb.git'
-          UPSTREAM_BRANCH_DEFAULT: 'main' # Default for scheduled runs
-          TARGET_BRANCH_DEFAULT: 'main'   # Default for scheduled runs
+          UPSTREAM_BRANCH_DEFAULT: 'main'
+          TARGET_BRANCH_DEFAULT: 'main'
 
       - name: Add Upstream Remote and Fetch Latest Changes
         id: fetch_upstream
@@ -99,36 +99,39 @@ jobs:
           echo "SHORT_UPSTREAM_SHA=$SHORT_UPSTREAM_SHA" >> $GITHUB_ENV
           echo "Fetched upstream branch ${{ env.UPSTREAM_BRANCH_NAME }} at SHA: $UPSTREAM_LATEST_SHA (Short: $SHORT_UPSTREAM_SHA)"
 
-      - name: Check if Sync is Needed
+      - name: Check if Sync is Needed and Target Branch Exists
         id: check_sync_status
         run: |
           UPSTREAM_LATEST_SHA_ENV="${{ env.UPSTREAM_COMMIT_SHA }}"
           TARGET_BRANCH_NAME_ENV="${{ env.TARGET_BRANCH_IN_FORK }}"
           UPSTREAM_BRANCH_NAME_ENV="${{ env.UPSTREAM_BRANCH_NAME }}"
 
-          echo "Checking sync status..."
-          echo "Upstream commit SHA ($UPSTREAM_BRANCH_NAME_ENV): $UPSTREAM_LATEST_SHA_ENV"
-          echo "Target branch in fork: $TARGET_BRANCH_NAME_ENV"
+          echo "Checking sync status for target branch '$TARGET_BRANCH_NAME_ENV' against upstream '$UPSTREAM_BRANCH_NAME_ENV'..."
+          echo "Upstream commit SHA: $UPSTREAM_LATEST_SHA_ENV"
 
-          # Attempt to fetch the target branch from origin to ensure local ref is up-to-date.
-          # Use --no-tags to avoid fetching all tags from origin again if not needed.
-          # Use --quiet to reduce log noise.
-          echo "Fetching target branch '$TARGET_BRANCH_NAME_ENV' from origin (fork)..."
-          if ! git fetch origin "$TARGET_BRANCH_NAME_ENV" --no-tags --quiet; then
-            echo "Target branch '$TARGET_BRANCH_NAME_ENV' might not exist on origin yet or fetch failed. Assuming sync is needed."
-            # No exit here, proceed to check rev-parse which will confirm non-existence
+          echo "Verifying existence and fetching target branch '$TARGET_BRANCH_NAME_ENV' from origin (fork)..."
+          # Attempt to fetch the specific target branch from origin (the fork).
+          # We use --depth=1 as we only need its tip for rev-parse and to confirm existence.
+          # If this fetch fails, the branch likely doesn't exist on the remote.
+          if ! git fetch origin "$TARGET_BRANCH_NAME_ENV" --no-tags --quiet --depth=1; then
+            echo "::error::Target branch '$TARGET_BRANCH_NAME_ENV' does not exist on origin (fork: ${{ github.server_url }}/${{ github.repository }}) or could not be fetched."
+            echo "A pull request requires an existing base branch. Please ensure the branch '$TARGET_BRANCH_NAME_ENV' exists in the fork."
+            exit 1
           fi
 
-          # Get SHA of the target branch in the fork.
-          # refs/remotes/origin/ is the correct way to reference a remote branch after fetch.
-          TARGET_BRANCH_CURRENT_SHA=$(git rev-parse --verify "refs/remotes/origin/$TARGET_BRANCH_NAME_ENV" 2>/dev/null)
-
+          # If fetch succeeded, the branch exists. Get its SHA.
+          # After a successful fetch of a specific branch, refs/remotes/origin/BRANCH_NAME is updated.
+          TARGET_BRANCH_CURRENT_SHA=$(git rev-parse "refs/remotes/origin/$TARGET_BRANCH_NAME_ENV")
           if [ -z "$TARGET_BRANCH_CURRENT_SHA" ]; then
-            echo "Target branch 'origin/$TARGET_BRANCH_NAME_ENV' not found locally after fetch (likely doesn't exist on remote). Sync is needed."
-            echo "SYNC_NEEDED=true" >> $GITHUB_ENV
+            # This case should ideally not be reached if the fetch above succeeded and the branch exists.
+            echo "::error::Could not get SHA for target branch 'refs/remotes/origin/$TARGET_BRANCH_NAME_ENV' even after a successful fetch. This is unexpected."
+            exit 1
+          fi
+          echo "Target branch '$TARGET_BRANCH_NAME_ENV' current SHA: $TARGET_BRANCH_CURRENT_SHA"
+
           # Check if the upstream commit is an ancestor of or the same as the target branch's commit.
           # If true, the target branch is up-to-date or ahead.
-          elif git merge-base --is-ancestor "$UPSTREAM_LATEST_SHA_ENV" "$TARGET_BRANCH_CURRENT_SHA"; then
+          if git merge-base --is-ancestor "$UPSTREAM_LATEST_SHA_ENV" "$TARGET_BRANCH_CURRENT_SHA"; then
             echo "Target branch '$TARGET_BRANCH_NAME_ENV' (at $TARGET_BRANCH_CURRENT_SHA) is already up-to-date or ahead of upstream branch '$UPSTREAM_BRANCH_NAME_ENV' (at $UPSTREAM_LATEST_SHA_ENV)."
             echo "No sync required."
             echo "SYNC_NEEDED=false" >> $GITHUB_ENV
@@ -146,10 +149,9 @@ jobs:
         id: create_and_push_new_branch
         run: |
           # Generate a unique branch name for the sync
-          SHORT_SHA_ENV="${{ env.SHORT_UPSTREAM_SHA }}" # Already set in fetch_upstream
-          # Using a consistent prefix and date for uniqueness.
+          # SHORT_UPSTREAM_SHA is already set in env by fetch_upstream step
           NEW_SYNC_BRANCH_NAME="sync/upstream-${{ env.UPSTREAM_BRANCH_NAME }}-to-${{ env.TARGET_BRANCH_IN_FORK }}-$(date +%Y%m%d-%H%M%S)"
-          echo "NEW_BRANCH_NAME_ENV=$NEW_SYNC_BRANCH_NAME" >> $GITHUB_ENV
+          echo "NEW_BRANCH_NAME_ENV=$NEW_SYNC_BRANCH_NAME" >> $GITHUB_ENV # Make it available to subsequent steps
           echo "Preparing new branch: $NEW_SYNC_BRANCH_NAME from upstream commit ${{ env.UPSTREAM_COMMIT_SHA }}"
 
           # Check if branch exists locally (e.g., from a failed previous run that didn't clean up)
@@ -201,6 +203,8 @@ jobs:
         uses: peter-evans/create-pull-request@v6
         with:
           token: ${{ github.token }} # Uses the default GITHUB_TOKEN
+          # The commit-message is for commits the action might make if it modifies files.
+          # Since we are pushing a branch that's already set to the upstream commit, this might not be used, but it's good practice to include.
           commit-message: "chore: Sync from upstream ${{ env.UPSTREAM_OWNER_REPO }}/${{ env.UPSTREAM_BRANCH_NAME }} (${{ env.SHORT_UPSTREAM_SHA }})"
           title: "Sync: ${{ env.UPSTREAM_OWNER_REPO }}/${{ env.UPSTREAM_BRANCH_NAME }} (${{ env.SHORT_UPSTREAM_SHA }}) to ${{ env.TARGET_BRANCH_IN_FORK }}"
           body: |
@@ -228,7 +232,7 @@ jobs:
           # team-reviewers: team1,team2 # Optional: comma-separated list
 
       - name: Notify on Failure
-        if: failure() # This condition triggers if any previous step in the job fails
+        if: failure() && (env.SYNC_NEEDED == 'true' || env.SYNC_NEEDED == '') # Only if sync was attempted or status unknown
         run: echo "::error::Workflow failed during the sync and PR creation process. Check the logs for specific error messages."
       
       - name: Sync Skipped Notification
