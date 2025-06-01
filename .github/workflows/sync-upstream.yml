@@ -1,4 +1,4 @@
-name: Sync Fork with Upstream and Create PR
+name: Sync Fork with Upstream (Clone Method) and Create PR
 
 on:
   schedule:
@@ -15,98 +15,103 @@ jobs:
       pull-requests: write # To create the pull request in the fork
 
     steps:
-      - name: Checkout Forked Repository
+      - name: Checkout Forked Repository (for PR context)
         uses: actions/checkout@v4
         with:
-          # Fetch all history for all branches and tags.
-          # This is crucial for correctly interacting with upstream branches.
+          # Fetch depth 0 can be useful for peter-evans/create-pull-request
+          # if it needs more history from the fork for its operations.
           fetch-depth: 0
           # Optional: If GITHUB_TOKEN's default permissions are restricted,
           # you might need a Personal Access Token (PAT) with 'repo' scope.
           # token: ${{ secrets.YOUR_PAT_WITH_REPO_SCOPE }}
 
-      - name: Set up Git User
+      - name: Define Upstream Details
+        id: upstream_details
         run: |
+          echo "url=https://github.com/nocodb/nocodb.git" >> $GITHUB_OUTPUT
+          echo "branch=master" >> $GITHUB_OUTPUT # Define the upstream branch to sync from
+
+      - name: Sync from Upstream and Push Branch to Fork
+        id: sync_branch_details
+        env:
+          # GITHUB_TOKEN is automatically available and used for authentication.
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Construct the URL for your fork repository.
+          FORK_REPO_SLUG: ${{ github.repository }} # e.g., your-username/your-fork-repo
+          UPSTREAM_REPO_URL: ${{ steps.upstream_details.outputs.url }}
+          UPSTREAM_BRANCH_NAME: ${{ steps.upstream_details.outputs.branch }}
+        run: |
+          set -e # Exit immediately if a command exits with a non-zero status.
+          TEMP_UPSTREAM_DIR="upstream_clone_temp_dir" # Name for the temporary directory
+          
+          echo "Cloning upstream repository (${UPSTREAM_REPO_URL}) branch (${UPSTREAM_BRANCH_NAME}) into ${TEMP_UPSTREAM_DIR}..."
+          # Clone only the target branch with minimal history (depth 1).
+          git clone --depth 1 --branch "${UPSTREAM_BRANCH_NAME}" "${UPSTREAM_REPO_URL}" "${TEMP_UPSTREAM_DIR}"
+          
+          # Navigate into the temporary clone directory.
+          cd "${TEMP_UPSTREAM_DIR}"
+          
+          echo "Setting up Git user in ${TEMP_UPSTREAM_DIR}..."
           git config user.name "${{ github.actor }}"
           git config user.email "${{ github.actor_id}}+${{ github.actor }}@users.noreply.github.com"
+          
+          # Get the commit SHA of the HEAD of the cloned upstream branch.
+          UPSTREAM_COMMIT_SHA=$(git rev-parse HEAD)
+          echo "Upstream commit SHA (from ${TEMP_UPSTREAM_DIR}/.git/HEAD): ${UPSTREAM_COMMIT_SHA}"
+          # Make this SHA available to subsequent steps via environment variables for the PR body.
+          echo "UPSTREAM_COMMIT_SHA_ENV=${UPSTREAM_COMMIT_SHA}" >> $GITHUB_ENV
 
-      - name: Define Upstream Repository URL
-        id: upstream_repo
-        run: echo "url=https://github.com/nocodb/nocodb.git" >> $GITHUB_OUTPUT
-
-      - name: Add Upstream Remote
-        run: git remote add upstream ${{ steps.upstream_repo.outputs.url }}
-
-      - name: Fetch Upstream Master
-        run: |
-          echo "Fetching upstream/master from ${{ steps.upstream_repo.outputs.url }}..."
-          git fetch upstream master --verbose
-          echo "Fetched upstream/master."
-          # Verify that upstream/master ref exists and get its SHA
-          UPSTREAM_HEAD_SHA=$(git rev-parse upstream/master)
-          if [ -z "$UPSTREAM_HEAD_SHA" ]; then
-            echo "::error::Could not resolve SHA for upstream/master after fetch. Upstream remote or branch might be incorrect."
+          # Create a unique branch name for the sync, incorporating a timestamp.
+          BRANCH_NAME="sync-upstream-$(date +%Y%m%d%H%M%S)"
+          echo "Creating new branch '${BRANCH_NAME}' from upstream's ${UPSTREAM_BRANCH_NAME} (commit ${UPSTREAM_COMMIT_SHA})..."
+          # Create the new branch from the current HEAD (which is the upstream branch's HEAD).
+          git checkout -b "$BRANCH_NAME"
+          
+          # Verify that the new branch's HEAD matches the upstream commit SHA.
+          NEW_BRANCH_HEAD_SHA=$(git rev-parse HEAD)
+          if [ "${UPSTREAM_COMMIT_SHA}" != "${NEW_BRANCH_HEAD_SHA}" ]; then
+            echo "::error:: Mismatch after creating branch in temp clone! New branch HEAD SHA (${NEW_BRANCH_HEAD_SHA}) does not match original upstream SHA (${UPSTREAM_COMMIT_SHA})."
             exit 1
           fi
-          echo "SHA of fetched upstream/master is: $UPSTREAM_HEAD_SHA"
+          echo "Successfully created branch '${BRANCH_NAME}' in ${TEMP_UPSTREAM_DIR} based on upstream commit."
 
-      - name: Create and Push Branch from Upstream Master
-        id: sync_details # Renamed id for clarity as it provides more than just branch name
-        run: |
-          # Get the commit SHA of the fetched upstream/master.
-          # This will be used in the PR body and for verification.
-          UPSTREAM_COMMIT_SHA=$(git rev-parse upstream/master)
-          echo "Target upstream commit (upstream/master): ${UPSTREAM_COMMIT_SHA}"
+          echo "Adding fork repository (https://github.com/${FORK_REPO_SLUG}.git) as remote 'fork_remote'..."
+          # Add the fork repository as a remote, authenticating with GITHUB_TOKEN.
+          git remote add fork_remote "https://x-access-token:${GH_TOKEN}@github.com/${FORK_REPO_SLUG}.git"
           
-          # Make the upstream commit SHA available to subsequent steps via environment variables.
-          echo "UPSTREAM_COMMIT_SHA=${UPSTREAM_COMMIT_SHA}" >> $GITHUB_ENV
-
-          # Create a unique branch name for the PR, incorporating a timestamp.
-          BRANCH_NAME="sync-upstream-$(date +%Y%m%d%H%M%S)"
-          echo "Attempting to create new branch '${BRANCH_NAME}' from upstream/master..."
-
-          # Create the new branch directly from the fetched 'upstream/master'.
-          # This command checks out 'upstream/master' and creates a new branch from it in one step.
-          git checkout -b "$BRANCH_NAME" upstream/master
-          
-          # Verify that the new branch's HEAD matches the upstream master's commit SHA.
-          NEW_BRANCH_HEAD_SHA=$(git rev-parse HEAD) # HEAD now points to the new local branch
-          echo "SHA of new branch ('${BRANCH_NAME}') HEAD is: ${NEW_BRANCH_HEAD_SHA}"
-
-          if [ "${UPSTREAM_COMMIT_SHA}" != "${NEW_BRANCH_HEAD_SHA}" ]; then
-            echo "::error:: Mismatch after creating branch! New branch HEAD SHA (${NEW_BRANCH_HEAD_SHA}) does not match target upstream SHA (${UPSTREAM_COMMIT_SHA})."
-            exit 1 
-          else
-            echo "Success: New branch '${BRANCH_NAME}' correctly created from upstream/master (commit ${UPSTREAM_COMMIT_SHA})."
-          fi
-          
-          # Push the new branch (which contains the upstream changes) to your fork (origin).
-          echo "Pushing branch '${BRANCH_NAME}' to origin (your fork)..."
-          git push origin "$BRANCH_NAME"
-          echo "Pushed branch '${BRANCH_NAME}' to origin."
+          echo "Pushing branch '${BRANCH_NAME}' to fork repository (fork_remote)..."
+          git push fork_remote "$BRANCH_NAME"
+          echo "Pushed branch '${BRANCH_NAME}' to fork repository."
           
           # Output the new branch name for use in the pull request step.
-          echo "branch_name=$BRANCH_NAME" >> $GITHUB_OUTPUT
-          # Output the upstream SHA as well, in case it's needed directly by a step output (though GITHUB_ENV is often cleaner)
-          echo "upstream_sha_output=$UPSTREAM_COMMIT_SHA" >> $GITHUB_OUTPUT
-
+          echo "branch_name_output=$BRANCH_NAME" >> $GITHUB_OUTPUT
+          
+          # Navigate out of the temporary directory before deleting it.
+          cd ..
+          echo "Cleaning up temporary directory ${TEMP_UPSTREAM_DIR}..."
+          rm -rf "${TEMP_UPSTREAM_DIR}"
+          echo "Temporary directory cleaned up successfully."
 
       - name: Create Pull Request
         uses: peter-evans/create-pull-request@v6
         with:
-          # If you used a PAT in the checkout step, you might need to pass it here too.
+          # If you used a PAT in the checkout step or if GITHUB_TOKEN has insufficient permissions
+          # for create-pull-request action specifically, you might need to pass it here.
           # token: ${{ secrets.YOUR_PAT_WITH_REPO_SCOPE }}
-          commit-message: "chore: Sync with upstream nocodb/master"
-          title: "Sync with upstream nocodb/master (Branch: ${{ steps.sync_details.outputs.branch_name }})"
+          commit-message: "chore: Sync with upstream ${{ steps.upstream_details.outputs.branch }}"
+          title: "Sync with upstream ${{ steps.upstream_details.outputs.branch }} (Branch: ${{ steps.sync_branch_details.outputs.branch_name_output }})"
           body: |
-            This PR was automatically created by a GitHub Action to sync this fork's `master` branch with the latest changes from `upstream/master` (nocodb/nocodb).
+            This PR was automatically created by a GitHub Action to sync this fork with the latest changes from `${{ steps.upstream_details.outputs.url }}`, branch `${{ steps.upstream_details.outputs.branch }}`.
 
-            **Upstream Commit:** `${{ env.UPSTREAM_COMMIT_SHA }}`
-            **Source Branch in Fork (Head of this PR):** `${{ steps.sync_details.outputs.branch_name }}`
+            **Upstream Commit Synced:** `${{ env.UPSTREAM_COMMIT_SHA_ENV }}`
+            **Source Branch in Fork (Head of this PR):** `${{ steps.sync_branch_details.outputs.branch_name_output }}`
 
             Please review the changes and merge if appropriate.
-          branch: ${{ steps.sync_details.outputs.branch_name }} # The branch containing the upstream changes (e.g., sync-upstream-YYYYMMDDHHMMSS)
-          base: master # The branch in your fork to merge into (e.g., your fork's master or main branch)
+          # The branch in your fork that contains the upstream changes (created in the previous step).
+          branch: ${{ steps.sync_branch_details.outputs.branch_name_output }}
+          # The branch in YOUR FORK that the changes should be merged INTO.
+          # Typically 'master' or 'main'. Adjust if your fork's default/target branch is different.
+          base: master 
           labels: |
             upstream-sync
             automated-pr
@@ -117,4 +122,4 @@ jobs:
 
       - name: Notify on Failure (Optional)
         if: failure()
-        run: echo "::error::Workflow failed to sync with upstream and create PR."
+        run: echo "::error::Workflow failed to sync with upstream (clone method) and create PR."
