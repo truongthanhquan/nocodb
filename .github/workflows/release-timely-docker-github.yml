@@ -1,6 +1,8 @@
 name: "Release : Timely Docker Github"
 
 on:
+  pull_request:
+    types: [closed]
   # Triggered manually
   workflow_dispatch:
     inputs:
@@ -48,6 +50,7 @@ on:
 
 jobs:
   buildx:
+    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
     runs-on: ubuntu-22.04
     env:
       working-directory: ./packages/nocodb
