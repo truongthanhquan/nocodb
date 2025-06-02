@@ -166,7 +166,7 @@ jobs:
           This sync branch was created directly from the upstream commit." \
             --head "${{ env.NEW_BRANCH_NAME_ENV }}" \
             --base "${{ env.TARGET_BRANCH_IN_FORK }}" \
-            --label "upstream-sync,automated-pr"
+            --label "automated-pr"
 
       - name: Notify on Failure
         if: failure() && (env.SYNC_NEEDED == 'true')
