@@ -85,7 +85,6 @@ jobs:
           echo "Upstream commit SHA ($UPSTREAM_BRANCH_NAME_ENV): $UPSTREAM_LATEST_SHA_ENV"
           echo "Target branch in fork: $TARGET_BRANCH_NAME_ENV"
           
-          # Fetch the target branch from origin to ensure we have the latest state
           if ! git fetch origin "$TARGET_BRANCH_NAME_ENV" --no-tags --quiet 2>/dev/null; then
             echo "Target branch 'origin/$TARGET_BRANCH_NAME_ENV' not found. Sync is needed."
             echo "SYNC_NEEDED=true" >> $GITHUB_ENV
@@ -118,7 +117,7 @@ jobs:
         if: env.SYNC_NEEDED == 'true'
         id: create_and_push_new_branch
         run: |
-          SHORT_SHA_ENV="${{ env.SHORT_UPSTREAM_SHA.LEADING
+          SHORT_SHA_ENV="${{ env.SHORT_UPSTREAM_SHA }}"
           NEW_SYNC_BRANCH_NAME="sync/${{ env.UPSTREAM_BRANCH_NAME }}-from-${SHORT_SHA_ENV}-$(date +%Y%m%d-%H%M%S)"
           echo "NEW_BRANCH_NAME_ENV=$NEW_SYNC_BRANCH_NAME" >> $GITHUB_ENV
           echo "Preparing new branch: $NEW_SYNC_BRANCH_NAME from upstream commit ${{ env.UPSTREAM_COMMIT_SHA }}"
@@ -131,8 +130,7 @@ jobs:
           git checkout -b "$NEW_SYNC_BRANCH_NAME" "${{ env.UPSTREAM_COMMIT_SHA }}"
           echo "Successfully created local branch $NEW_SYNC_BRANCH_NAME."
           
-          # Verify there are commits to push
-          if git diff --quiet "${{ env.TARGET_BRANCH_IN_FORK }}" "$NEW_SYNC_BRANCH_NAME"; then
+          if git diff --quiet "${{ env.TARGET_BRANCH_IN_FORK }}" "$NEW_SYNC_BRANCH_NAME" 2>/dev/null; then
             echo "No differences between $NEW_SYNC_BRANCH_NAME and ${{ env.TARGET_BRANCH_IN_FORK }}. Skipping push and PR creation."
             echo "SYNC_NEEDED=false" >> $GITHUB_ENV
             exit 0
@@ -188,7 +186,7 @@ jobs:
           This sync branch was created directly from the upstream commit." \
             --head "${{ env.NEW_BRANCH_NAME_ENV }}" \
             --base "${{ env.TARGET_BRANCH_IN_FORK }}" \
-            # --label "upstream-sync,automated-pr"
+            --label "upstream-sync,automated-pr"
 
       - name: Notify on Failure
         if: failure() && (env.SYNC_NEEDED == 'true')
