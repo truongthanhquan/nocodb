@@ -50,7 +50,7 @@ on:
 
 jobs:
   buildx:
-    if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
+    #if: github.event.pull_request.merged == true && github.event.pull_request.base.ref == 'master'
     runs-on: ubuntu-22.04
     env:
       working-directory: ./packages/nocodb
