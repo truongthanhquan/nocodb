@@ -85,20 +85,20 @@ jobs:
           echo "Upstream commit SHA ($UPSTREAM_BRANCH_NAME_ENV): $UPSTREAM_LATEST_SHA_ENV"
           echo "Target branch in fork: $TARGET_BRANCH_NAME_ENV"
           
-          if ! git fetch origin "$TARGET_BRANCH_NAME_ENV" --no-tags --quiet 2>/dev/null; then
-            echo "Target branch 'origin/$TARGET_BRANCH_NAME_ENV' not found. Sync is needed."
+          # Fetch all branches from origin to ensure we have the latest state
+          git fetch origin --no-tags --quiet
+          
+          if ! git rev-parse --verify "refs/remotes/origin/$TARGET_BRANCH_NAME_ENV" >/dev/null 2>&1; then
+            echo "Target branch 'origin/$TARGET_BRANCH_NAME_ENV' not found in fork. Sync is needed."
             echo "SYNC_NEEDED=true" >> $GITHUB_ENV
             echo "TARGET_BRANCH_CURRENT_SHA=" >> $GITHUB_ENV
             exit 0
           fi
           
-          TARGET_BRANCH_CURRENT_SHA=$(git rev-parse --verify "refs/remotes/origin/$TARGET_BRANCH_NAME_ENV" 2>/dev/null)
+          TARGET_BRANCH_CURRENT_SHA=$(git rev-parse "refs/remotes/origin/$TARGET_BRANCH_NAME_ENV")
           echo "Target branch SHA: $TARGET_BRANCH_CURRENT_SHA"
           
-          if [ -z "$TARGET_BRANCH_CURRENT_SHA" ]; then
-            echo "Target branch 'origin/$TARGET_BRANCH_NAME_ENV' could not be resolved. Assuming sync is needed."
-            echo "SYNC_NEEDED=true" >> $GITHUB_ENV
-          elif [ "$UPSTREAM_LATEST_SHA_ENV" = "$TARGET_BRANCH_CURRENT_SHA" ]; then
+          if [ "$UPSTREAM_LATEST_SHA_ENV" = "$TARGET_BRANCH_CURRENT_SHA" ]; then
             echo "Target branch '$TARGET_BRANCH_NAME_ENV' (SHA: $TARGET_BRANCH_CURRENT_SHA) is identical to upstream branch '$UPSTREAM_BRANCH_NAME_ENV' (SHA: $UPSTREAM_LATEST_SHA_ENV)."
             echo "No sync required."
             echo "SYNC_NEEDED=false" >> $GITHUB_ENV
@@ -130,14 +130,24 @@ jobs:
           git checkout -b "$NEW_SYNC_BRANCH_NAME" "${{ env.UPSTREAM_COMMIT_SHA }}"
           echo "Successfully created local branch $NEW_SYNC_BRANCH_NAME."
           
-          if git diff --quiet "${{ env.TARGET_BRANCH_IN_FORK }}" "$NEW_SYNC_BRANCH_NAME" 2>/dev/null; then
-            echo "No differences between $NEW_SYNC_BRANCH_NAME and ${{ env.TARGET_BRANCH_IN_FORK }}. Skipping push and PR creation."
-            echo "SYNC_NEEDED=false" >> $GITHUB_ENV
-            exit 0
+          # Fetch target branch locally for accurate diff
+          if [ -n "${{ env.TARGET_BRANCH_CURRENT_SHA }}" ]; then
+            git fetch origin "${{ env.TARGET_BRANCH_IN_FORK }}" --no-tags --quiet
+            git checkout "${{ env.TARGET_BRANCH_IN_FORK }}" --quiet
+            git checkout "$NEW_SYNC_BRANCH_NAME" --quiet
+            if git diff --quiet "${{ env.TARGET_BRANCH_IN_FORK }}" "$NEW_SYNC_BRANCH_NAME"; then
+              echo "No differences between $NEW_SYNC_BRANCH_NAME and ${{ env.TARGET_BRANCH_IN_FORK }}. Skipping push and PR creation."
+              echo "SYNC_NEEDED=false" >> $GITHUB_ENV
+              exit 0
+            fi
           fi
           
           echo "Pushing new branch $NEW_SYNC_BRANCH_NAME to origin (fork)..."
-          git push origin "$NEW_SYNC_BRANCH_NAME" --force
+          if ! git push origin "$NEW_SYNC_BRANCH_NAME" --force 2>&1 | tee push_output.log; then
+            echo "::error::Failed to push branch $NEW_SYNC_BRANCH_NAME to origin. Check permissions or branch protection rules."
+            cat push_output.log
+            exit 1
+          fi
           echo "Successfully pushed $NEW_SYNC_BRANCH_NAME to origin."
 
       - name: Ensure Labels Exist in Fork
@@ -154,22 +164,40 @@ jobs:
             LABEL_COLOR="${COLORS[i]}"
             echo "Ensuring label '$LABEL_NAME' exists..."
             if ! gh label list --repo "${{ github.repository }}" --search "$LABEL_NAME" | grep -q "$LABEL_NAME"; then
-              gh label create "$LABEL_NAME" \
+              echo "Creating label '$LABEL_NAME'..."
+              if gh label create "$LABEL_NAME" \
                 --repo "${{ github.repository }}" \
                 --description "$LABEL_DESC" \
-                --color "$LABEL_COLOR" \
-                || echo "::warning::Failed to create label '$LABEL_NAME'. This might be a permission issue or transient error."
+                --color "$LABEL_COLOR" 2>&1 | tee label_creation.log; then
+                echo "Successfully created label '$LABEL_NAME'."
+              else
+                echo "::error::Failed to create label '$LABEL_NAME'. Check permissions or GitHub API status."
+                cat label_creation.log
+                exit 1
+              fi
             else
               echo "Label '$LABEL_NAME' already exists."
             fi
           done
+          # Wait briefly to ensure labels are available
+          sleep 2
 
       - name: Create Pull Request
         if: env.SYNC_NEEDED == 'true'
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
-          gh pr create \
+          echo "Creating pull request..."
+          # Log SHAs for debugging
+          echo "Head branch: ${{ env.NEW_BRANCH_NAME_ENV }}"
+          echo "Base branch: ${{ env.TARGET_BRANCH_IN_FORK }}"
+          HEAD_SHA=$(git rev-parse "origin/${{ env.NEW_BRANCH_NAME_ENV }}" 2>/dev/null || echo "")
+          BASE_SHA=$(git rev-parse "origin/${{ env.TARGET_BRANCH_IN_FORK }}" 2>/dev/null || echo "")
+          echo "Head SHA: $HEAD_SHA"
+          echo "Base SHA: $BASE_SHA"
+          
+          # Create PR without labels first
+          PR_URL=$(gh pr create \
             --title "Sync: ${{ env.UPSTREAM_OWNER_REPO }}/${{ env.UPSTREAM_BRANCH_NAME }} (${{ env.SHORT_UPSTREAM_SHA }}) to ${{ env.TARGET_BRANCH_IN_FORK }}" \
             --body "This PR was automatically created by a GitHub Action to sync this fork with the upstream repository.
 
@@ -186,7 +214,24 @@ jobs:
           This sync branch was created directly from the upstream commit." \
             --head "${{ env.NEW_BRANCH_NAME_ENV }}" \
             --base "${{ env.TARGET_BRANCH_IN_FORK }}" \
-            # --label "upstream-sync,automated-pr"
+            --repo "${{ github.repository }}")
+          
+          if [ -z "$PR_URL" ]; then
+            echo "::error::Failed to create pull request. Check logs for details."
+            exit 1
+          fi
+          echo "Pull request created: $PR_URL"
+          
+          # Apply labels separately
+          echo "Applying labels 'upstream-sync' and 'automated-pr'..."
+          for LABEL in "upstream-sync" "automated-pr"; do
+            if gh pr edit "$PR_URL" --add-label "$LABEL" --repo "${{ github.repository }}" 2>&1 | tee label_edit.log; then
+              echo "Successfully added label '$LABEL' to PR."
+            else
+              echo "::warning::Failed to add label '$LABEL' to PR. Continuing without label."
+              cat label_edit.log
+            fi
+          done
 
       - name: Notify on Failure
         if: failure() && (env.SYNC_NEEDED == 'true')
