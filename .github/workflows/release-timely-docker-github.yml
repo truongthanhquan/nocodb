@@ -9,6 +9,7 @@ on:
       tag:
         description: "Docker image tag"
         required: true
+        default: latest
       targetEnv:
         description: "Target Environment"
         required: true
