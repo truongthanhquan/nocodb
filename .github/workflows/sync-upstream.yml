@@ -1,4 +1,4 @@
-name: Sync Fork with Upstream and Create PR
+name: Sync Fork with Upstream and Auto-Merge PR
 
 on:
   schedule:
@@ -184,6 +184,7 @@ jobs:
 
       - name: Create Pull Request
         if: env.SYNC_NEEDED == 'true'
+        id: create_pr
         env:
           GH_TOKEN: ${{ secrets.PAT_TOKEN }}
         run: |
@@ -196,8 +197,8 @@ jobs:
           echo "Head SHA: $HEAD_SHA"
           echo "Base SHA: $BASE_SHA"
           
-          # Create PR without labels first
-          PR_URL=$(gh pr create \
+          # Create PR and capture the PR number
+          PR_OUTPUT=$(gh pr create \
             --title "Sync: ${{ env.UPSTREAM_OWNER_REPO }}/${{ env.UPSTREAM_BRANCH_NAME }} (${{ env.SHORT_UPSTREAM_SHA }}) to ${{ env.TARGET_BRANCH_IN_FORK }}" \
             --body "This PR was automatically created by a GitHub Action to sync this fork with the upstream repository.
 
@@ -210,28 +211,58 @@ jobs:
           - Target Branch (Base): \`${{ env.TARGET_BRANCH_IN_FORK }}\`
           - New Sync Branch (Head): \`${{ env.NEW_BRANCH_NAME_ENV }}\`
 
-          Please review the changes and merge if appropriate.
-          This sync branch was created directly from the upstream commit." \
+          This PR will be auto-merged if it passes all checks and has no conflicts." \
             --head "${{ env.NEW_BRANCH_NAME_ENV }}" \
             --base "${{ env.TARGET_BRANCH_IN_FORK }}" \
-            --repo "${{ github.repository }}")
+            --repo "${{ github.repository }}" \
+            --label "upstream-sync,automated-pr" 2>&1)
           
-          if [ -z "$PR_URL" ]; then
+          if [ $? -ne 0 ]; then
             echo "::error::Failed to create pull request. Check logs for details."
+            echo "$PR_OUTPUT"
             exit 1
           fi
+          
+          PR_URL="$PR_OUTPUT"
           echo "Pull request created: $PR_URL"
           
-          # Apply labels separately
-          echo "Applying labels 'upstream-sync' and 'automated-pr'..."
-          for LABEL in "upstream-sync" "automated-pr"; do
-            if gh pr edit "$PR_URL" --add-label "$LABEL" --repo "${{ github.repository }}" 2>&1 | tee label_edit.log; then
-              echo "Successfully added label '$LABEL' to PR."
+          # Extract PR number from URL (e.g., https://github.com/owner/repo/pull/123 -> 123)
+          if [[ "$PR_URL" =~ /pull/([0-9]+)$ ]]; then
+            PR_NUMBER="${BASH_REMATCH[1]}"
+            echo "PR_NUMBER=$PR_NUMBER" >> $GITHUB_ENV
+          else
+            echo "::error::Failed to parse PR number from URL: $PR_URL"
+            exit 1
+          fi
+
+      - name: Auto-Merge Pull Request
+        if: env.SYNC_NEEDED == 'true'
+        env:
+          GH_TOKEN: ${{ secrets.PAT_TOKEN }}
+        run: |
+          PR_NUMBER="${{ env.PR_NUMBER }}"
+          echo "Attempting to auto-merge PR #$PR_NUMBER..."
+          
+          # Check if PR is mergeable
+          PR_STATE=$(gh pr view "$PR_NUMBER" --repo "${{ github.repository }}" --json mergeable,mergeableState | jq -r '.mergeableState')
+          echo "PR mergeable state: $PR_STATE"
+          
+          if [ "$PR_STATE" = "MERGEABLE" ]; then
+            echo "PR #$PR_NUMBER is mergeable. Proceeding with auto-merge..."
+            if gh pr merge "$PR_NUMBER" \
+              --repo "${{ github.repository }}" \
+              --merge \
+              --delete-branch 2>&1 | tee merge_output.log; then
+              echo "Successfully merged PR #$PR_NUMBER and deleted branch ${{ env.NEW_BRANCH_NAME_ENV }}."
             else
-              echo "::warning::Failed to add label '$LABEL' to PR. Continuing without label."
-              cat label_edit.log
+              echo "::error::Failed to merge PR #$PR_NUMBER. Check permissions, branch protection rules, or merge conflicts."
+              cat merge_output.log
+              exit 1
             fi
-          done
+          else
+            echo "::warning::PR #$PR_NUMBER is not in a mergeable state (state: $PR_STATE). Skipping auto-merge."
+            echo "Please review the PR manually: https://github.com/${{ github.repository }}/pull/$PR_NUMBER"
+          fi
 
       - name: Notify on Failure
         if: failure() && (env.SYNC_NEEDED == 'true')
