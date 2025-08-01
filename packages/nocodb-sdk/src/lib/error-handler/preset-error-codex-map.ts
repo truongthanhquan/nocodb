@@ -87,6 +87,14 @@ export const presetErrorCodexMap: Partial<
     message: (resource: string, id: string) => `${resource} '${id}' not found`,
     code: 404,
   },
+  [NcErrorType.WIDGET_NOT_FOUND]: {
+    message: (id: string) => `Widget '${id}' not found`,
+    code: 404,
+  },
+  [NcErrorType.DASHBOARD_NOT_FOUND]: {
+    message: (id: string) => `Dashboard '${id}' not found`,
+    code: 404,
+  },
   [NcErrorType.REQUIRED_FIELD_MISSING]: {
     message: (field: string) => `Field '${field}' is required`,
     code: 422,
@@ -136,6 +144,10 @@ export const presetErrorCodexMap: Partial<
   },
   [NcErrorType.INVALID_SHARED_VIEW_PASSWORD]: {
     message: 'Invalid shared view password',
+    code: 403,
+  },
+  [NcErrorType.INVALID_SHARED_DASHBOARD_PASSWORD]: {
+    message: 'Invalid shared dashboard password',
     code: 403,
   },
   [NcErrorType.INVALID_ATTACHMENT_JSON]: {
@@ -198,6 +210,11 @@ export const presetErrorCodexMap: Partial<
     message: (_workspaceId: string) => 'SSO login required for workspace',
     code: 403,
   },
+  [NcErrorType.SSO_GENERATED_TOKEN_REQUIRED]: {
+    message: (_workspaceId: string) =>
+      'This workspace requires SSO-authenticated tokens. Please generate a new token after signing in with SSO',
+    code: 403,
+  },
   [NcErrorType.MAX_INSERT_LIMIT_EXCEEDED]: {
     message: (limit: string) => `Maximum ${limit} records during insert`,
     code: 422,
@@ -210,6 +227,10 @@ export const presetErrorCodexMap: Partial<
   [NcErrorType.INVALID_VALUE_FOR_FIELD]: {
     message: (message: string) => message,
     code: 422,
+  },
+  [NcErrorType.INVALID_REQUEST_BODY]: {
+    message: (message: string) => message,
+    code: 400,
   },
   [NcErrorType.BASE_USER_ERROR]: {
     message: (message: string) => message || 'Something went wrong',

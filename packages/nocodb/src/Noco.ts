@@ -16,12 +16,14 @@ import type { Express } from 'express';
 import type http from 'http';
 import type Sharp from 'sharp';
 import type { AppHooksService } from '~/services/app-hooks/app-hooks.service';
+import type { AuditService } from '~/meta/audit.service';
 import { MetaTable, RootScopes } from '~/utils/globals';
 import { AppModule } from '~/app.module';
 import { isEE, T } from '~/utils';
 import { getAppUrl } from '~/utils/appUrl';
 import { DataReflection, Integration } from '~/models';
 import { getRedisURL } from '~/helpers/redisHelpers';
+
 dotenv.config();
 declare const module: any;
 
@@ -45,10 +47,12 @@ export default class Noco {
   public readonly router: express.Router;
   public readonly baseRouter: express.Router;
   public static _ncMeta: any;
+  public static _ncAudit: any;
   public static appHooksService: AppHooksService;
   public readonly metaMgr: any;
   public readonly metaMgrv2: any;
   public env: string;
+  protected static _nestApp: INestApplication;
 
   protected config: any;
   protected requestContext: any;
@@ -86,8 +90,20 @@ export default class Noco {
     return this._ncMeta;
   }
 
+  public static get nestApp() {
+    return this._nestApp;
+  }
+
+  public static get ncAudit(): AuditService {
+    return this._ncAudit ?? this._ncMeta;
+  }
+
   public get ncMeta(): any {
     return Noco._ncMeta;
+  }
+
+  public get ncAudit(): AuditService {
+    return Noco._ncAudit;
   }
 
   public static getConfig(): any {
@@ -110,6 +126,7 @@ export default class Noco {
       bufferLogs: true,
       bodyParser: false,
     });
+    Noco._nestApp = nestApp;
     this.initCustomLogger(nestApp);
     NcDebug.log('Custom logger initialized');
     nestApp.flushLogs();
@@ -239,4 +256,6 @@ export default class Noco {
   protected static initCustomLogger(_nestApp: INestApplication<any>) {
     // setup custom logger for nestjs if needed
   }
+
+  public static async prepareAuditService() {}
 }

@@ -6,6 +6,9 @@ import {
   type FilterType,
   type MetaType,
   type PaginatedType,
+  type PermissionEntity,
+  type PermissionKey,
+  type ProjectRoles,
   type PublicAttachmentScope,
   type Roles,
   type RolesObj,
@@ -18,6 +21,7 @@ import {
 import type { Composer, I18n } from 'vue-i18n'
 import type { Theme as AntTheme } from 'ant-design-vue/es/config-provider'
 import type { UploadFile } from 'ant-design-vue'
+import type { TooltipPlacement } from 'ant-design-vue/lib/tooltip'
 import type { ImageWindowLoader } from '../components/smartsheet/grid/canvas/loaders/ImageLoader'
 import type { SpriteLoader } from '../components/smartsheet/grid/canvas/loaders/SpriteLoader'
 import type { ActionManager } from '../components/smartsheet/grid/canvas/loaders/ActionManager'
@@ -74,11 +78,18 @@ type Filter = FilterType & {
   readOnly?: boolean
 }
 
-type NocoI18n = I18n<{}, unknown, unknown, string, false>
+type NocoI18n = I18n<Record<string, unknown>, Record<string, unknown>, Record<string, unknown>, string, false>
 
 interface ThemeConfig extends AntTheme {
   primaryColor: string
   accentColor: string
+}
+
+interface RowMetaRowColorInfo {
+  rowBgColor?: string | null
+  rowLeftBorderColor?: string | null
+  rowHoverColor?: string | null
+  rowBorderColor?: string | null
 }
 
 interface Row {
@@ -124,7 +135,7 @@ interface Row {
     minutes?: number
     recordIndex?: number // For week spanning records in month view
     maxSpanning?: number
-  }
+  } & RowMetaRowColorInfo
 }
 
 interface Attachment {
@@ -199,6 +210,7 @@ type NcProject = BaseType & {
   starred?: boolean
   uuid?: string
   users?: User[]
+  default_role?: ProjectRoles | string
 }
 
 interface UndoRedoAction {
@@ -244,7 +256,9 @@ interface Users {
   invitationToken?: string
 }
 
-type ViewPageType = 'view' | 'webhook' | 'api' | 'field' | 'relation'
+type ProjectPageType = 'overview' | 'collaborator' | 'data-source' | 'base-settings' | 'syncs' | 'permissions'
+
+type ViewPageType = 'view' | 'webhook' | 'api' | 'field' | 'relation' | 'permissions'
 
 type NcButtonSize = 'xxsmall' | 'xsmall' | 'small' | 'medium' | 'xs'
 
@@ -477,8 +491,13 @@ interface CellRendererOptions {
     minutes?: number
     recordIndex?: number // For week spanning records in month view
     maxSpanning?: number
-  }
+  } & RowMetaRowColorInfo
   allowLocalUrl?: boolean
+  /**
+   * `isRootCell` is used to determine if the cell is the root cell of the row or nested cell
+   * This is used in row colouring
+   */
+  isRootCell?: boolean
 }
 
 interface CellRenderStore {
@@ -492,11 +511,14 @@ interface CellRenderStore {
     hoverValue: number
   }
   ltar?: { oldX?: number; oldY?: number; x?: number; y?: number; width?: number; height?: number; value?: any }[]
+  [key: string]: any
 }
 
 type CursorType = CSSProperties['cursor']
 
 type SetCursorType = (cursor: CursorType, customCondition?: (prevValue: CursorType) => boolean) => void
+
+type MakeCellEditableFn = (row: Row, clickedColumn: CanvasGridColumn, showEditCellRestrictionTooltip?: boolean) => void
 
 interface CellRenderFn {
   (ctx: CanvasRenderingContext2D, options: CellRendererOptions): void | { x?: number; y?: number }
@@ -525,7 +547,7 @@ interface CellRenderer {
       path?: Array<number>,
     ) => Promise<any>
     actionManager: ActionManager
-    makeCellEditable: (row: Row, clickedColumn: CanvasGridColumn) => void
+    makeCellEditable: MakeCellEditableFn
     selected: boolean
     imageLoader: ImageWindowLoader
     cellRenderStore: CellRenderStore
@@ -534,6 +556,7 @@ interface CellRenderer {
     openDetachedLongText: (props: UseDetachedLongTextProps) => void
     formula?: boolean
     allowLocalUrl?: boolean
+    t: Composer['t']
   }) => Promise<boolean>
   handleKeyDown?: (options: {
     e: KeyboardEvent
@@ -552,10 +575,11 @@ interface CellRenderer {
       path?: Array<number>,
     ) => Promise<any>
     actionManager: ActionManager
-    makeCellEditable: (row: Row, clickedColumn: CanvasGridColumn) => void
+    makeCellEditable: MakeCellEditableFn
     cellRenderStore: CellRenderStore
     openDetachedLongText: (props: UseDetachedLongTextProps) => void
     allowLocalUrl?: boolean
+    t: Composer['t']
   }) => Promise<boolean | void>
   handleHover?: (options: {
     event: MouseEvent
@@ -574,13 +598,14 @@ interface CellRenderer {
       path?: Array<number>,
     ) => Promise<any>
     actionManager: ActionManager
-    makeCellEditable: (row: Row, clickedColumn: CanvasGridColumn) => void
+    makeCellEditable: MakeCellEditableFn
     selected: boolean
     imageLoader: ImageWindowLoader
     cellRenderStore: CellRenderStore
     setCursor: SetCursorType
     path: Array<number>
     baseUsers?: (Partial<UserType> | Partial<User>)[]
+    t: Composer['t']
   }) => Promise<void>
   [key: string]: any
 }
@@ -645,6 +670,7 @@ type CanvasEditEnabledType = {
   height: number | string
   fixed: boolean
   path: Array<number>
+  isCellEditable?: boolean
 } | null
 
 type CanvasCellEventDataInjType = ExtractInjectedReactive<typeof CanvasCellEventDataInj>
@@ -676,6 +702,187 @@ interface CloudFeaturesType {
 
 type CanvasScrollToCellFn = (row?: number, column?: number, path?: Array<number>, horizontalScroll?: boolean) => void
 
+interface RowColouringEvaluatedResultType {
+  is_set_as_background: boolean
+  color: string
+  hoverColor: string | null
+  rawColor: string | undefined
+  borderColor: string | null
+}
+
+interface PermissionConfig {
+  entity: PermissionEntity
+  entityId: string
+  entityTitle?: string
+  permission: PermissionKey
+}
+
+interface PermissionSelectorUser {
+  id: string
+  email: string
+  display_name?: string | null
+}
+
+// NcList type starts here
+
+type MultiSelectRawValueType = Array<string | number>
+
+type RawValueType = string | number | MultiSelectRawValueType
+
+interface NcListItemType {
+  value?: RawValueType
+  label?: string
+  ncItemDisabled?: boolean
+  ncItemTooltip?: string
+  [key: string]: any
+}
+
+interface NcListSearchBasisOptionType {
+  /**
+   * The search basis info to use for the list.
+   * This will tell user that the search is based on this property.
+   */
+  searchBasisInfo: string
+  /**
+   * The filter callback to use for the list.
+   */
+  filterCallback: (input: string, option: NcListItemType, index: Number) => boolean
+}
+
+/**
+ * Props interface for the List component
+ */
+interface NcListProps {
+  /** The currently selected value */
+  value: RawValueType
+  /** The list of items to display */
+  list: NcListItemType[]
+  /**
+   * The key to use for accessing the value from a list item
+   * @default 'value'
+   */
+  optionValueKey?: string
+  /**
+   * The key to use for accessing the label from a list item
+   * @default 'label'
+   */
+  optionLabelKey?: string
+  /** Whether the list is open or closed */
+  open?: boolean
+  /**
+   * Whether to close the list after an item is selected
+   * @default true
+   */
+  closeOnSelect?: boolean
+  /** Placeholder text for the search input */
+  searchInputPlaceholder?: string
+  /** Show search input box always */
+  showSearchAlways?: boolean
+  /** Whether to show the currently selected option */
+  showSelectedOption?: boolean
+  /**
+   * The height of each item in the list, used for virtual list rendering.
+   * @default 38
+   */
+  itemHeight?: number
+  variant?: 'default' | 'small' | 'medium'
+  /** Custom filter function for list items */
+  filterOption?: (input: string, option: NcListItemType, index: Number) => boolean
+  /**
+   * Indicates whether the component allows multiple selections.
+   */
+  isMultiSelect?: boolean
+  /**
+   * The minimum number of items required in the list to enable search functionality.
+   */
+  minItemsForSearch?: number
+  /**
+   * Whether the list is locked and cannot be interacted with
+   */
+  isLocked?: boolean
+
+  /**
+   * Whether input should have border
+   */
+  inputBordered?: boolean
+
+  listWrapperClassName?: string
+
+  containerClassName?: string
+
+  wrapperClassName?: string
+
+  itemClassName?: string
+
+  itemTooltipPlacement?: TooltipPlacement
+
+  /**
+   * Whether to hide the top divider
+   */
+  hideTopDivider?: boolean
+
+  emptyDescription?: string
+
+  /**
+   * This will remove side padding and rounded corners from the list item
+   */
+  itemFullWidth?: boolean
+
+  /**
+   * Whether to stop propagation on item click
+   */
+  stopPropagationOnItemClick?: boolean
+
+  /**
+   * @Info - This will be used only if search result not found based on default search method.
+   *
+   * - With the help of search basis we can search list items based on different fields properties which are not visible for user.
+   * - Also we will show this info to user in tooltip.
+   *
+   * @example
+   * ```ts
+   * const searchBasisOptions: NcListSearchBasisOptionType[] = [
+   *  {
+   *    searchBasisInfo: t('msg.info.matchedByButtonLabel'),
+   *    filterCallback: (query, option) => {
+   *      if (!option) return false
+   *
+   *      const column = option as ColumnType
+   *
+   *      return isButton(column) && searchCompare([(column.colOptions as ButtonType)?.label], query)
+   *    },
+   *  },
+   *  {
+   *    searchBasisInfo: t('msg.info.matchedByFieldDescription'),
+   *    filterCallback: (query, option) => {
+   *      if (!option) return false
+   *
+   *      const column = option as ColumnType
+   *
+   *      if (!column.description) return false
+   *
+   *      return searchCompare([column.description], query)
+   *    },
+   *  }
+   * ]
+   * ```
+   */
+  searchBasisOptions?: NcListSearchBasisOptionType[]
+}
+
+// NcList type ends here
+
+type NcDropdownPlacement =
+  | 'bottom'
+  | 'top'
+  | 'bottomLeft'
+  | 'bottomRight'
+  | 'topLeft'
+  | 'topRight'
+  | 'topCenter'
+  | 'bottomCenter'
+  | 'right'
+
 export type {
   User,
   ProjectMetaInfo,
@@ -683,6 +890,7 @@ export type {
   Filter,
   NocoI18n,
   ThemeConfig,
+  RowMetaRowColorInfo,
   Row,
   RolePermissions,
   Permission,
@@ -698,6 +906,7 @@ export type {
   Group,
   GroupNestedIn,
   Users,
+  ProjectPageType,
   ViewPageType,
   NcButtonSize,
   SidebarTableNode,
@@ -728,4 +937,14 @@ export type {
   CanvasGroup,
   CloudFeaturesType,
   CanvasScrollToCellFn,
+  RowColouringEvaluatedResultType,
+  PermissionConfig,
+  PermissionSelectorUser,
+  NcListProps,
+  NcListItemType,
+  NcListSearchBasisOptionType,
+  MultiSelectRawValueType,
+  RawValueType,
+  NcDropdownPlacement,
+  MakeCellEditableFn,
 }

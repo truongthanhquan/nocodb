@@ -3,6 +3,8 @@ import fs from 'fs';
 import mime from 'mime/lite';
 import slash from 'slash';
 import { PublicAttachmentScope } from 'nocodb-sdk';
+import type { NcContext } from 'nocodb-sdk';
+import type { Column } from '~/models';
 import { getToolDir } from '~/utils/nc-config';
 import { NcError } from '~/helpers/catchError';
 
@@ -80,3 +82,9 @@ export const ATTACHMENT_ROOTS = [
   PublicAttachmentScope.PROFILEPICS,
   PublicAttachmentScope.ORGANIZATIONPICS,
 ];
+
+export const validateNumberOfFilesInCell = async (
+  _context: NcContext,
+  _number: number,
+  _column: Column,
+) => {};

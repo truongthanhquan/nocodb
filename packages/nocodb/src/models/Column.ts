@@ -39,6 +39,7 @@ import {
   CacheDelDirection,
   CacheGetType,
   CacheScope,
+  FilterCacheScope,
   MetaTable,
 } from '~/utils/globals';
 import NocoCache from '~/cache/NocoCache';
@@ -48,6 +49,7 @@ import {
   prepareForResponse,
 } from '~/utils/modelUtils';
 import { getFormulasReferredTheColumn } from '~/helpers/formulaHelpers';
+import { cleanBaseSchemaCacheForBase } from '~/helpers/scriptHelper';
 
 const selectColors = enumColors.light;
 
@@ -273,6 +275,10 @@ export default class Column<T = any> implements ColumnType {
     );
 
     await View.clearSingleQueryCache(context, column.fk_model_id, null, ncMeta);
+
+    cleanBaseSchemaCacheForBase(context.base_id).catch(() => {
+      logger.error('Failed to clean base schema cache');
+    });
 
     return col;
   }
@@ -788,6 +794,33 @@ export default class Column<T = any> implements ColumnType {
     if (!col) {
       return;
     }
+    // If the column is one of CreatedBy, LastModifiedBy, CreatedAt, or LastModifiedAt
+    // and it is a system column, then delete its alias columns as well.
+    // This deletion is only performed through meta-sync because system columns
+    // cannot be deleted via API calls.
+    if (
+      (
+        [
+          UITypes.CreatedTime,
+          UITypes.LastModifiedTime,
+          UITypes.LastModifiedBy,
+          UITypes.CreatedBy,
+        ] as UITypes[]
+      ).includes(col.uidt) &&
+      col.system
+    ) {
+      const aliasCols = await ncMeta.metaList2(
+        context.workspace_id,
+        context.base_id,
+        MetaTable.COLUMNS,
+        {
+          condition: { uidt: col.uidt, system: false },
+        },
+      );
+      for (const aliasCol of aliasCols) {
+        await Column.delete(context, aliasCol.id, ncMeta);
+      }
+    }
 
     // todo: or instead of delete reset related foreign key value to null and handle in BaseModel
 
@@ -1114,7 +1147,10 @@ export default class Column<T = any> implements ColumnType {
     }
     // delete filters
     {
-      const cachedList = await NocoCache.getList(CacheScope.FILTER_EXP, [id]);
+      const cachedList = await NocoCache.getList(CacheScope.FILTER_EXP, [
+        FilterCacheScope.COLUMN,
+        id,
+      ]);
       let { list: filters } = cachedList;
       const { isNoneList } = cachedList;
       if (!isNoneList && !filters.length) {
@@ -1281,6 +1317,10 @@ export default class Column<T = any> implements ColumnType {
     {
       await View.clearSingleQueryCache(context, col.fk_model_id, null, ncMeta);
     }
+
+    cleanBaseSchemaCacheForBase(context.base_id).catch(() => {
+      logger.error('Failed to clean base schema cache');
+    });
   }
 
   static async update(
@@ -1640,6 +1680,10 @@ export default class Column<T = any> implements ColumnType {
         );
       }
     }
+
+    cleanBaseSchemaCacheForBase(context.base_id).catch(() => {
+      logger.error('Failed to clean base schema cache');
+    });
   }
 
   static async updateCustomIndexName(

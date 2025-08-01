@@ -28,6 +28,7 @@ const formatData = (
     offset?: number
   },
   path: Array<number> = [],
+  evaluateRowMetaRowColorInfoCallback?: (row: Record<string, any>) => RowMetaRowColorInfo,
 ) => {
   // If pageInfo exists, use it for calculation
   if (pageInfo?.page && pageInfo?.pageSize) {
@@ -40,6 +41,7 @@ const formatData = (
           rowIndex,
           isLastRow: rowIndex === pageInfo.totalRows! - 1,
           path,
+          ...(evaluateRowMetaRowColorInfoCallback?.(row) ?? {}),
         },
       }
     })
@@ -53,6 +55,7 @@ const formatData = (
     rowMeta: {
       rowIndex: offset + index,
       path,
+      ...(evaluateRowMetaRowColorInfoCallback?.(row) ?? {}),
     },
   }))
 }
@@ -100,7 +103,7 @@ export function useInfiniteData(args: {
 
   const { user } = useGlobal()
 
-  const { fetchSharedViewData, fetchCount } = useSharedView()
+  const { fetchSharedViewData, fetchCount, fetchBulkListData } = useSharedView()
 
   const {
     nestedFilters,
@@ -113,6 +116,7 @@ export function useInfiniteData(args: {
     totalRowsWithoutSearchQuery,
     fetchTotalRowsWithSearchQuery,
     whereQueryFromUrl,
+    eventBus,
   } = disableSmartsheet
     ? {
         nestedFilters: ref([]),
@@ -124,10 +128,19 @@ export function useInfiniteData(args: {
         totalRowsWithoutSearchQuery: ref(0),
         fetchTotalRowsWithSearchQuery: computed(() => false),
         whereQueryFromUrl: computed(() => ''),
+        eventBus: useEventBus<SmartsheetStoreEvents>(EventBusEnum.SmartsheetStore),
       }
     : useSmartsheetStoreOrThrow()
 
+  const { isGroupBy } = disableSmartsheet ? { isGroupBy: computed(() => false) } : useViewGroupByOrThrow()
+
   const { blockExternalSourceRecordVisibility, showUpgradeToSeeMoreRecordsModal } = useEeConfig()
+
+  const { getEvaluatedRowMetaRowColorInfo } = disableSmartsheet
+    ? {
+        getEvaluatedRowMetaRowColorInfo: (_row: any) => ({}),
+      }
+    : useViewRowColorRender()
 
   const selectedAllRecords = ref(false)
 
@@ -251,7 +264,7 @@ export function useInfiniteData(args: {
 
   const getChunkIndex = (rowIndex: number) => Math.floor(rowIndex / CHUNK_SIZE)
 
-  const fetchChunk = async (chunkId: number, path: Array<number> = [], forceFetch = false) => {
+  const _fetchChunk = async (chunkId: number, path: Array<number> = [], forceFetch = false) => {
     const dataCache = getDataCache(path)
 
     if (dataCache.chunkStates.value[chunkId] && !forceFetch) return
@@ -265,6 +278,7 @@ export function useInfiniteData(args: {
         dataCache.chunkStates.value[chunkId] = undefined
         return
       }
+
       newItems.forEach((item) => {
         dataCache.cachedRows.value.set(item.rowMeta.rowIndex!, item)
       })
@@ -273,6 +287,214 @@ export function useInfiniteData(args: {
       console.error('Error fetching chunk:', error)
       dataCache.chunkStates.value[chunkId] = undefined
     }
+  }
+
+  let pendingChunkRequests: Array<{
+    chunkId: number
+    path: Array<number>
+    forceFetch: boolean
+    resolve: (value: any) => void
+    reject: (error: any) => void
+  }> = []
+  let batchTimer: NodeJS.Timeout | null = null
+  const BATCH_SIZE = 50
+  const BATCH_TIMEOUT = 200
+
+  async function loadBulkAggCommentsCount(allFormattedRows: Array<{ rows: Array<Row>; path: Array<number> }>) {
+    if (!isUIAllowed('commentCount') || isPublic?.value) return
+    if (allFormattedRows.length === 0) return
+
+    const allIds: string[] = []
+    const rowIdToRowMap = new Map<string, Row>()
+
+    for (const { rows } of allFormattedRows) {
+      for (const row of rows) {
+        const id = extractPkFromRow(row.row, meta?.value?.columns as ColumnType[])
+        if (id) {
+          allIds.push(id)
+          rowIdToRowMap.set(id, row)
+        }
+      }
+    }
+
+    if (allIds.length === 0) return
+
+    try {
+      const aggCommentCount = await $api.utils.commentCount({
+        ids: allIds,
+        fk_model_id: meta.value!.id as string,
+      })
+
+      aggCommentCount?.forEach((commentData: Record<string, any>) => {
+        const row = rowIdToRowMap.get(commentData.row_id)
+        if (row) {
+          row.rowMeta.commentCount = +commentData.count || 0
+        }
+      })
+    } catch (e) {
+      console.error('Failed to load bulk aggregate comment count:', e)
+    }
+  }
+
+  async function fetchChunkIndividually(chunkId: number, path: Array<number>) {
+    const dataCache = getDataCache(path)
+    dataCache.chunkStates.value[chunkId] = 'loading'
+    const offset = chunkId * CHUNK_SIZE
+
+    try {
+      const newItems = await loadData({ offset, limit: CHUNK_SIZE }, false, path)
+      if (!newItems) {
+        dataCache.chunkStates.value[chunkId] = undefined
+        return
+      }
+
+      newItems.forEach((item) => {
+        dataCache.cachedRows.value.set(item.rowMeta.rowIndex!, item)
+      })
+      dataCache.chunkStates.value[chunkId] = 'loaded'
+    } catch (error) {
+      console.error('Error fetching chunk:', error)
+      dataCache.chunkStates.value[chunkId] = undefined
+      throw error
+    }
+  }
+
+  async function processBatch() {
+    if (pendingChunkRequests.length === 0) return
+
+    if (batchTimer) {
+      clearTimeout(batchTimer)
+      batchTimer = null
+    }
+
+    const batch = [...pendingChunkRequests]
+    pendingChunkRequests = []
+
+    try {
+      const bulkRequests = []
+
+      for (let i = 0; i < batch.length; i++) {
+        const req = batch[i]
+        const where = await callbacks?.getWhereFilter?.(req.path)
+        bulkRequests.push({
+          where,
+          offset: req.chunkId * CHUNK_SIZE,
+          limit: CHUNK_SIZE,
+          alias: `chunk_${req.chunkId}_${req.path.join('_')}`,
+          ...(isUIAllowed('sortSync') ? {} : { sortArrJson: JSON.stringify(sorts.value) }),
+          ...(isUIAllowed('filterSync') ? {} : { filterArrJson: JSON.stringify(nestedFilters.value) }),
+        })
+      }
+
+      const bulkResponse = !isPublic?.value
+        ? await $api.dbDataTableBulkList.dbDataTableBulkList(meta.value.id!, { viewId: viewMeta.value?.id }, bulkRequests, {})
+        : await fetchBulkListData({}, bulkRequests)
+
+      const allFormattedRows: Array<{ rows: Array<Row>; path: Array<number> }> = []
+      const processedChunks: Array<{ request: any; rows: Array<Row>; dataCache: any }> = []
+
+      for (const request of batch) {
+        try {
+          const alias = `chunk_${request.chunkId}_${request.path.join('_')}`
+          const chunkData = bulkResponse[alias]
+          const dataCache = getDataCache(request.path)
+
+          if (chunkData && chunkData.list) {
+            const rows = formatData(chunkData.list, chunkData.pageInfo, undefined, request.path, getEvaluatedRowMetaRowColorInfo)
+            rows.forEach((item: any) => {
+              dataCache.cachedRows.value.set(item.rowMeta.rowIndex!, item)
+            })
+            dataCache.chunkStates.value[request.chunkId] = 'loaded'
+
+            allFormattedRows.push({ rows, path: request.path })
+            processedChunks.push({ request, rows, dataCache })
+          } else {
+            dataCache.chunkStates.value[request.chunkId] = undefined
+          }
+
+          request.resolve(undefined)
+        } catch (error) {
+          console.error(`Error processing chunk ${request.chunkId}:`, error)
+          const dataCache = getDataCache(request.path)
+          dataCache.chunkStates.value[request.chunkId] = undefined
+          request.reject(error)
+        }
+      }
+
+      await loadBulkAggCommentsCount(allFormattedRows)
+
+      for (const { request, rows, dataCache } of processedChunks) {
+        try {
+          rows.forEach((item: any) => {
+            dataCache.cachedRows.value.set(item.rowMeta.rowIndex!, item)
+          })
+
+          dataCache.chunkStates.value[request.chunkId] = 'loaded'
+          request.resolve(undefined)
+        } catch (error) {
+          console.error(`Error caching chunk ${request.chunkId}:`, error)
+          dataCache.chunkStates.value[request.chunkId] = undefined
+          request.reject(error)
+        }
+      }
+    } catch (error) {
+      console.error('Bulk chunk request failed, falling back to individual requests:', error)
+
+      const promises = batch.map((request) =>
+        fetchChunkIndividually(request.chunkId, request.path)
+          .then(() => request.resolve(undefined))
+          .catch((err) => request.reject(err)),
+      )
+
+      await Promise.allSettled(promises)
+    }
+  }
+
+  const fetchChunk = async (chunkId: number, path: Array<number> = [], forceFetch = false) => {
+    const dataCache = getDataCache(path)
+
+    if (dataCache.chunkStates.value[chunkId] && !forceFetch) return
+
+    const existingRequest = pendingChunkRequests.find((req) => req.chunkId === chunkId && req.path.join(',') === path.join(','))
+
+    if (existingRequest && !forceFetch) {
+      return new Promise<void>((resolve, reject) => {
+        const originalResolve = existingRequest.resolve
+        const originalReject = existingRequest.reject
+
+        existingRequest.resolve = (value) => {
+          originalResolve(value)
+          resolve(value)
+        }
+
+        existingRequest.reject = (error) => {
+          originalReject(error)
+          reject(error)
+        }
+      })
+    }
+
+    return new Promise<void>((resolve, reject) => {
+      pendingChunkRequests.push({
+        chunkId,
+        path,
+        forceFetch,
+        resolve,
+        reject,
+      })
+
+      dataCache.chunkStates.value[chunkId] = 'loading'
+
+      if (pendingChunkRequests.length >= BATCH_SIZE) {
+        processBatch()
+      } else {
+        if (!batchTimer) {
+          batchTimer = setTimeout(() => {
+            processBatch()
+          }, BATCH_TIMEOUT)
+        }
+      }
+    })
   }
 
   const clearCache = (visibleStartIndex: number, visibleEndIndex: number, path: Array<number> = []) => {
@@ -366,13 +588,13 @@ export function useInfiniteData(args: {
       where?: string
     } = {},
     _shouldShowLoading?: boolean,
-    path?: Array<number> = [],
+    path: Array<number> = [],
   ): Promise<Row[]> {
     if ((!base?.value?.id || !meta.value?.id || !viewMeta.value?.id) && !isPublic?.value) return []
 
     const whereFilter = await callbacks?.getWhereFilter?.(path)
 
-    if (!path.length && params.offset && blockExternalSourceRecordVisibility(isExternalSource.value)) {
+    if (!disableSmartsheet && !path.length && params.offset && blockExternalSourceRecordVisibility(isExternalSource.value)) {
       if (!isAlreadyShownUpgradeModal.value && params.offset >= EXTERNAL_SOURCE_VISIBLE_ROWS) {
         isAlreadyShownUpgradeModal.value = true
 
@@ -401,6 +623,7 @@ export function useInfiniteData(args: {
             ...(isUIAllowed('filterSync') ? {} : { filterArrJson: JSON.stringify(nestedFilters.value) }),
             includeSortAndFilterColumns: true,
             where: whereFilter,
+            include_row_color: true,
           } as any)
         : await fetchSharedViewData(
             {
@@ -415,7 +638,7 @@ export function useInfiniteData(args: {
             },
           )
 
-      const data = formatData(response.list, response.pageInfo, params, path)
+      const data = formatData(response.list, response.pageInfo, params, path, getEvaluatedRowMetaRowColorInfo)
 
       loadAggCommentsCount(data, path)
 
@@ -669,7 +892,9 @@ export function useInfiniteData(args: {
     dataCache.cachedRows.value = newCachedRows
 
     dataCache.totalRows.value = Math.max(0, (dataCache.totalRows.value || 0) - invalidIndexes.length)
+    dataCache.actualTotalRows.value = Math.max(0, (dataCache.actualTotalRows.value || 0) - invalidIndexes.length)
     callbacks?.syncVisibleData?.()
+    callbacks?.reloadAggregate?.({ path })
   }
 
   const willSortOrderChange = ({
@@ -1090,6 +1315,7 @@ export function useInfiniteData(args: {
       }
 
       dataCache.totalRows.value = (dataCache.totalRows.value || 0) - 1
+      dataCache.actualTotalRows.value = Math.max(0, (dataCache.actualTotalRows.value || 0) - 1)
       await syncCount(path)
       callbacks?.syncVisibleData?.()
     } catch (e: any) {
@@ -1178,9 +1404,11 @@ export function useInfiniteData(args: {
               tempTotalRows: number,
               tempChunkStates: Array<'loading' | 'loaded' | undefined>,
               path: Array<number>,
+              tempActualTotalRows: number,
             ) => {
               dataCache.cachedRows.value = new Map(tempLocalCache)
               dataCache.totalRows.value = tempTotalRows
+              dataCache.actualTotalRows.value = tempActualTotalRows
               dataCache.chunkStates.value = tempChunkStates
 
               await deleteRowById(id, undefined, path)
@@ -1193,6 +1421,7 @@ export function useInfiniteData(args: {
                 }
               }
               dataCache.totalRows.value = dataCache.totalRows.value! - 1
+              dataCache.actualTotalRows.value = Math.max(0, (dataCache.actualTotalRows.value || 0) - 1)
               callbacks?.syncVisibleData?.()
             },
             args: [
@@ -1201,6 +1430,7 @@ export function useInfiniteData(args: {
               clone(dataCache.totalRows.value),
               clone(dataCache.chunkStates.value),
               clone(path),
+              clone(dataCache.actualTotalRows.value),
             ],
           },
           redo: {
@@ -1212,9 +1442,11 @@ export function useInfiniteData(args: {
               tempChunkStates: Array<'loading' | 'loaded' | undefined>,
               rowID: string,
               path: Array<number>,
+              tempActualTotalRows: number,
             ) => {
               dataCache.cachedRows.value = new Map(tempLocalCache)
               dataCache.totalRows.value = tempTotalRows
+              dataCache.actualTotalRows.value = tempActualTotalRows
               dataCache.chunkStates.value = tempChunkStates
 
               row.row = { ...pkData, ...row.row }
@@ -1240,6 +1472,7 @@ export function useInfiniteData(args: {
               clone(dataCache.chunkStates.value),
               clone(beforeRowID),
               clone(path),
+              clone(dataCache.actualTotalRows.value),
             ],
           },
           scope: defineViewScope({ view: viewMeta.value }),
@@ -1265,6 +1498,7 @@ export function useInfiniteData(args: {
           rowIndex: insertIndex,
           new: false,
           saving: false,
+          ...getEvaluatedRowMetaRowColorInfo({ ...insertedData, ...currentRow.row }),
         },
       })
 
@@ -1328,9 +1562,11 @@ export function useInfiniteData(args: {
               previousCache: Map<number, Row>,
               tempTotalRows: number,
               path: Array<number>,
+              tempActualTotalRows: number,
             ) => {
               dataCache.cachedRows.value = new Map(previousCache)
               dataCache.totalRows.value = tempTotalRows
+              dataCache.actualTotalRows.value = tempActualTotalRows
 
               await updateRowProperty(
                 { row: toUpdate.oldRow, oldRow: toUpdate.row, rowMeta: toUpdate.rowMeta },
@@ -1346,6 +1582,7 @@ export function useInfiniteData(args: {
               clone(new Map(dataCache.cachedRows.value)),
               clone(dataCache.totalRows.value),
               clone(path),
+              clone(dataCache.actualTotalRows.value),
             ],
           },
           redo: {
@@ -1393,6 +1630,7 @@ export function useInfiniteData(args: {
       )
 
       Object.assign(toUpdate.oldRow, updatedRowData)
+      Object.assign(toUpdate.rowMeta, getEvaluatedRowMetaRowColorInfo(toUpdate.row))
 
       // Update the row in cachedRows
       if (toUpdate.rowMeta.rowIndex !== undefined) {
@@ -1493,7 +1731,6 @@ export function useInfiniteData(args: {
         currentUser: user.value,
       },
     )
-
     const newRow = dataCache.cachedRows.value.get(row.rowMeta.rowIndex!)
     if (newRow) newRow.rowMeta.isValidationFailed = isValidationFailed
 
@@ -1660,14 +1897,14 @@ export function useInfiniteData(args: {
               ...(isUIAllowed('filterSync') ? {} : { filterArrJson: JSON.stringify(nestedFilters.value) }),
             })
 
-        if (!path.length && blockExternalSourceRecordVisibility(isExternalSource.value)) {
+        if (!disableSmartsheet && !path.length && blockExternalSourceRecordVisibility(isExternalSource.value)) {
           totalRowsWithoutSearchQuery.value = Math.max(Math.min(200, _count as number), _count as number)
         } else {
           totalRowsWithoutSearchQuery.value = _count as number
         }
       }
 
-      if (!path.length && blockExternalSourceRecordVisibility(isExternalSource.value)) {
+      if (!disableSmartsheet && !path.length && blockExternalSourceRecordVisibility(isExternalSource.value)) {
         dataCache.totalRows.value = Math.min(200, count as number)
       } else {
         dataCache.totalRows.value = count as number
@@ -1754,6 +1991,31 @@ export function useInfiniteData(args: {
 
     return rows
   }
+
+  /**
+   * This is used to update the rowMeta color info when the row colour info is updated
+   */
+  eventBus.on((event) => {
+    if (![SmartsheetStoreEvents.TRIGGER_RE_RENDER, SmartsheetStoreEvents.ON_ROW_COLOUR_INFO_UPDATE].includes(event)) {
+      return
+    }
+
+    // If it is group by, we need to update the rowMeta color info for each row in the group
+    if (isGroupBy.value) {
+      groupDataCache.value.forEach((group) => {
+        group.cachedRows.value.forEach((row) => {
+          Object.assign(row.rowMeta, getEvaluatedRowMetaRowColorInfo(row.row))
+        })
+      })
+    } else {
+      // If it is not group by, we need to update the rowMeta color info for each row in cachedRows
+      const { cachedRows } = getDataCache()
+
+      cachedRows.value.forEach((row) => {
+        Object.assign(row.rowMeta, getEvaluatedRowMetaRowColorInfo(row.row))
+      })
+    }
+  })
 
   return {
     getDataCache,

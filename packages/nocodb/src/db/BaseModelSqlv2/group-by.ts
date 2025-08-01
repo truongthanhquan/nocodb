@@ -16,7 +16,7 @@ import {
   getColumnName,
 } from '~/helpers/dbHelpers';
 import { BaseUser, Column, Filter, Sort } from '~/models';
-import { getAliasGenerator } from '~/utils';
+import { getAliasGenerator, isOnPrem } from '~/utils';
 import { replaceDelimitedWithKeyValueSqlite3 } from '~/db/aggregations/sqlite3';
 
 export const groupBy = (baseModel: IBaseModelSqlV2, logger: Logger) => {
@@ -41,7 +41,7 @@ export const groupBy = (baseModel: IBaseModelSqlV2, logger: Logger) => {
     const selectors = [];
     const groupBySelectors = [];
     const getAlias = getAliasGenerator('__nc_gb');
-    const subGroupColumn = columns.find(
+    const _subGroupColumn = columns.find(
       (c) =>
         c.title === subGroupColumnName || c.column_name === subGroupColumnName,
     );
@@ -374,7 +374,10 @@ export const groupBy = (baseModel: IBaseModelSqlV2, logger: Logger) => {
 
     // group by using the column aliases
     qb.groupBy(...groupBySelectors);
-    applyPaginate(qb, rest);
+
+    if (!isOnPrem) {
+      applyPaginate(qb, rest);
+    }
 
     return await baseModel.execAndParse(qb);
   };

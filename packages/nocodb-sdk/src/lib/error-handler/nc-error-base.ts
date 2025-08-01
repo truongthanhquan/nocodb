@@ -65,6 +65,20 @@ export class NcErrorBase {
       ...args,
     });
   }
+
+  dashboardNotFound(id: string, args?: NcErrorArgs): never {
+    throw this.errorCodex.generateError(NcErrorType.DASHBOARD_NOT_FOUND, {
+      params: id,
+      ...args,
+    });
+  }
+
+  widgetNotFound(id: string, args?: NcErrorArgs): never {
+    throw this.errorCodex.generateError(NcErrorType.WIDGET_NOT_FOUND, {
+      params: id,
+      ...args,
+    });
+  }
   sourceNotFound(id: string, args?: NcErrorArgs): never {
     throw this.errorCodex.generateError(NcErrorType.SOURCE_NOT_FOUND, {
       params: id,
@@ -198,6 +212,15 @@ export class NcErrorBase {
   invalidSharedViewPassword(args?: NcErrorArgs): never {
     throw this.errorCodex.generateError(
       NcErrorType.INVALID_SHARED_VIEW_PASSWORD,
+      {
+        ...args,
+      }
+    );
+  }
+
+  invalidSharedDashboardPassword(args?: NcErrorArgs): never {
+    throw this.errorCodex.generateError(
+      NcErrorType.INVALID_SHARED_DASHBOARD_PASSWORD,
       {
         ...args,
       }
@@ -338,6 +361,14 @@ export class NcErrorBase {
       params: ncWorkspaceId,
     });
   }
+  allowedOnlySSOGeneratedToken(ncWorkspaceId: string): never {
+    throw this.errorCodex.generateError(
+      NcErrorType.SSO_GENERATED_TOKEN_REQUIRED,
+      {
+        params: ncWorkspaceId,
+      }
+    );
+  }
   maxInsertLimitExceeded(limit: number, args?: NcErrorArgs): never {
     throw this.errorCodex.generateError(NcErrorType.MAX_INSERT_LIMIT_EXCEEDED, {
       params: limit.toString(),
@@ -385,6 +416,12 @@ export class NcErrorBase {
         ...args,
       }
     );
+  }
+
+  invalidRequestBody(message: string): never {
+    throw this.errorCodex.generateError(NcErrorType.INVALID_REQUEST_BODY, {
+      params: message,
+    });
   }
 
   unprocessableEntity(message = 'Unprocessable entity'): never {

@@ -9,8 +9,8 @@ import { validatePayload } from 'src/helpers';
 import type { NcApiVersion } from 'nocodb-sdk';
 import type { LinkToAnotherRecordColumn } from '~/models';
 import type { NcContext } from '~/interface/config';
-import { nocoExecute } from '~/utils';
 import { Column, Model, Source, View } from '~/models';
+import { nocoExecute, processConcurrently } from '~/utils';
 import { DatasService } from '~/services/datas.service';
 import { NcError } from '~/helpers/catchError';
 import getAst from '~/helpers/getAst';
@@ -102,7 +102,7 @@ export class DataTableService {
       source,
     });
 
-    if (view.type !== ViewTypes.GRID) {
+    if (view && view.type !== ViewTypes.GRID) {
       NcError.badRequest('Aggregation is only supported on grid views');
     }
 
@@ -301,7 +301,7 @@ export class DataTableService {
     return { count };
   }
 
-  protected async getModelAndView(
+  async getModelAndView(
     context: NcContext,
     param: {
       baseId?: string;
@@ -866,23 +866,23 @@ export class DataTableService {
       NcError.badRequest('Invalid bulkFilterList');
     }
 
-    const dataListResults = await bulkFilterList.reduce(
-      async (accPromise, dF: any) => {
-        const acc = await accPromise;
-        const result = await this.datasService.dataList(context, {
-          query: {
-            ...dF,
-          },
+    const results = await processConcurrently(
+      bulkFilterList,
+      async (dF: any) => {
+        const data = await this.datasService.dataList(context, {
+          query: { ...dF },
           model,
           view,
         });
-        acc[dF.alias] = result;
-        return acc;
+        return { alias: dF.alias, data };
       },
-      Promise.resolve({}),
+      5,
     );
 
-    return dataListResults;
+    return results.reduce((acc, { alias, data }) => {
+      acc[alias] = data;
+      return acc;
+    }, {});
   }
 
   async bulkGroupBy(

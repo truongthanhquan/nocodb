@@ -2,10 +2,13 @@ import type { FunctionalComponent, SVGAttributes } from 'vue'
 import type { ButtonType, ColumnType, FormulaType, IntegrationType, LinkToAnotherRecordType } from 'nocodb-sdk'
 import {
   ButtonActionsType,
+  FormulaDataTypes,
   RelationTypes,
   UITypes,
   LongTextAiMetaProp as _LongTextAiMetaProp,
   checkboxIconList,
+  isLinksOrLTAR,
+  isSystemColumn,
   isValidURL,
   ratingIconList,
   validateEmail,
@@ -302,7 +305,7 @@ const isColumnInvalid = (
         result.isInvalid = !colOptions.fk_webhook_id
       } else if (colOptions.type === ButtonActionsType.Url) {
         result.isInvalid = !!colOptions.error
-      } else if (colOptions.type === ButtonActionsType.AI) {
+      } else if (colOptions.type === ButtonActionsType.Ai) {
         result.isInvalid =
           !colOptions.fk_integration_id ||
           (isReadOnly
@@ -416,6 +419,44 @@ const getColumnValidationError = (column: ColumnType, value?: any) => {
   }
 }
 
+const getFormulaColDataType = (col: ColumnType) => {
+  return (col?.colOptions as any)?.parsed_tree?.dataType ?? FormulaDataTypes.STRING
+}
+
+const isSearchableColumn = (column: ColumnType) => {
+  return (
+    !isSystemColumn(column) &&
+    ![
+      UITypes.Links,
+      UITypes.Rollup,
+      UITypes.DateTime,
+      UITypes.Date,
+      UITypes.Button,
+      UITypes.LastModifiedTime,
+      UITypes.CreatedTime,
+      UITypes.Barcode,
+      UITypes.QrCode,
+      UITypes.Order,
+    ].includes(column?.uidt as UITypes)
+  )
+}
+
+const showReadonlyColumnTooltip = (col: ColumnType) => {
+  const shouldApplyDataCell = !(isBarcode(col) || isQrCode(col) || isBoolean(col) || isRating(col))
+  return isReadOnlyVirtualCell(col) && shouldApplyDataCell && !isLinksOrLTAR(col)
+}
+
+const showEditRestrictedColumnTooltip = (col: ColumnType) => {
+  return (
+    !isReadOnlyVirtualCell(col) &&
+    ![UITypes.Button, UITypes.Count, UITypes.Order, UITypes.ForeignKey].includes(col.uidt as UITypes)
+  )
+}
+
+const disableMakeCellEditable = (col: ColumnType) => {
+  return showEditRestrictedColumnTooltip(col) && !isLinksOrLTAR(col)
+}
+
 export {
   uiTypes,
   isTypableInputColumn,
@@ -433,4 +474,9 @@ export {
   formViewHiddenColTypes,
   columnToValidate,
   getColumnValidationError,
+  getFormulaColDataType,
+  isSearchableColumn,
+  showReadonlyColumnTooltip,
+  showEditRestrictedColumnTooltip,
+  disableMakeCellEditable,
 }

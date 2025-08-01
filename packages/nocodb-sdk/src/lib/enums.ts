@@ -203,6 +203,28 @@ export enum AppEvents {
   DATA_EXPORT = 'data.export',
   DATA_IMPORT = 'data.import',
   USER_PROFILE_UPDATE = 'user.profile.update',
+
+  SCRIPT_CREATE = 'script.create',
+  SCRIPT_DELETE = 'script.delete',
+  SCRIPT_UPDATE = 'script.update',
+  SCRIPT_DUPLICATE = 'script.duplicate',
+
+  DASHBOARD_CREATE = 'dashboard.create',
+  DASHBOARD_UPDATE = 'dashboard.update',
+  DASHBOARD_DELETE = 'dashboard.delete',
+
+  SHARED_DASHBOARD_GENERATE_LINK = 'shared.dashboard.generate.link',
+  SHARED_DASHBOARD_UPDATE_LINK = 'shared.dashboard.update.link',
+  SHARED_DASHBOARD_DELETE_LINK = 'shared.dashboard.delete.link',
+
+  DASHBOARD_DUPLICATE_START = 'dashboard.duplicate.start',
+  DASHBOARD_DUPLICATE_COMPLETE = 'dashboard.duplicate.complete',
+  DASHBOARD_DUPLICATE_FAIL = 'dashboard.duplicate.fail',
+
+  WIDGET_CREATE = 'widget.create',
+  WIDGET_UPDATE = 'widget.update',
+  WIDGET_DELETE = 'widget.delete',
+  WIDGET_DUPLICATE = 'widget.duplicate',
 }
 
 export enum ClickhouseTables {
@@ -479,4 +501,11 @@ export enum NcApiVersion {
   V1,
   V2,
   V3,
+}
+
+export enum HookOperationCode {
+  insert = 1 << 0, // 1
+  update = 1 << 1, // 2
+  delete = 1 << 2, // 4
+  trigger = 1 << 3, // 8
 }

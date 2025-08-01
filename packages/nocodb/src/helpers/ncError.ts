@@ -4,7 +4,6 @@ import { NcErrorV3 } from './ncErrorV3';
 import type { ErrorObject } from 'ajv';
 import type {
   BaseType,
-  NcContext,
   NcErrorArgs,
   PlanLimitExceededDetailsType,
   SourceType,
@@ -17,8 +16,8 @@ export class NcError {
   static _V3 = new NcErrorV3();
 
   // return ncError based on api version
-  static get(context: NcContext) {
-    if (context.api_version === NcApiVersion.V3) {
+  static get(context?: { api_version?: NcApiVersion }) {
+    if (context?.api_version === NcApiVersion.V3) {
       return NcError._V3;
     }
     return NcError._;
@@ -48,6 +47,14 @@ export class NcError {
 
   static baseNotFound(id: string, args?: NcErrorArgs): never {
     return NcError._.baseNotFound(id, args);
+  }
+
+  static widgetNotFound(id: string, args?: NcErrorArgs): never {
+    return NcError._.widgetNotFound(id, args);
+  }
+
+  static dashboardNotFound(id: string, args?: NcErrorArgs): never {
+    return NcError._.dashboardNotFound(id, args);
   }
 
   static sourceNotFound(id: string, args?: NcErrorArgs): never {
@@ -129,6 +136,10 @@ export class NcError {
     return NcError._.invalidSharedViewPassword(args);
   }
 
+  static invalidSharedDashboardPassword(args?: NcErrorArgs): never {
+    return NcError._.invalidSharedDashboardPassword(args);
+  }
+
   static invalidAttachmentJson(payload: string, args?: NcErrorArgs): never {
     return NcError._.invalidAttachmentJson(payload, args);
   }
@@ -202,6 +213,9 @@ export class NcError {
 
   static allowedOnlySSOAccess(ncWorkspaceId: string): never {
     return NcError._.allowedOnlySSOAccess(ncWorkspaceId);
+  }
+  static allowedOnlySSOGeneratedToken(ncWorkspaceId: string): never {
+    return NcError._.allowedOnlySSOGeneratedToken(ncWorkspaceId);
   }
   static maxInsertLimitExceeded(limit: number, args?: NcErrorArgs): never {
     return NcError._.maxInsertLimitExceeded(limit, args);
