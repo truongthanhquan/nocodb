@@ -1,0 +1,26 @@
+# This workflow is triggered when a pull request to the 'master' branch is closed and merged.
+# It calls the reusable 'release-timely-docker.yml' workflow to build the Docker image.
+
+name: "Build Github Docker on Pull Request Merge"
+
+on:
+  # Trigger when a pull request to the master branch is closed.
+  pull_request:
+    types: [closed]
+    branches:
+      - master
+
+jobs:
+  trigger-build:
+    # This job will only run if the pull_request that has been merged.
+    if: github.event.pull_request.merged == true
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/release-timely-docker-github.yml
+    with:
+      tag: 'latest-pr'
+      targetEnv: 'DEV'
+      isDaily: 'N'
+    secrets: inherit
+
