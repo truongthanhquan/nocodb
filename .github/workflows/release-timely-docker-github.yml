@@ -1,20 +1,12 @@
-# This workflow builds and pushes a Docker image to GitHub Packages.
+# This is a reusable workflow that builds and pushes a Docker image to GitHub Packages.
 #
-# It can be triggered in three ways:
+# It can be triggered in two ways:
 # 1. Manually via `workflow_dispatch` with specified inputs.
-# 2. Automatically when a pull request targeting the `master` branch is closed and merged.
-# 3. Called by other workflows via `workflow_call`.
+# 2. Called by other workflows via `workflow_call`.
 
-name: "Release : Timely Docker Github"
+name: "Release: Timely Docker Github"
 
 on:
-  # Trigger when a pull request to the master branch is closed.
-  # The job itself will check if it was merged.
-  pull_request:
-    types: [closed]
-    branches:
-      - master
-
   # Triggered manually
   workflow_dispatch:
     inputs:
@@ -30,14 +22,14 @@ on:
           - DEV
           - PROD
       isDaily:
-        description: "Is daily build"
+        description: "Is a daily build"
         required: false
         type: choice
         options:
           - 'Y'
           - 'N'
 
-  # Triggered by other workflows
+  # Can be called by other workflows (e.g., pull-request-build.yml)
   workflow_call:
     inputs:
       tag:
@@ -49,7 +41,7 @@ on:
         required: true
         type: string
       isDaily:
-        description: "Is it triggered by daily schedule"
+        description: "Is it triggered by daily schedule?"
         required: false
         type: string
       currentVersion:
@@ -57,25 +49,14 @@ on:
         required: false
         type: string
     secrets:
-      DOCKERHUB_USERNAME:
-        required: true
-      DOCKERHUB_TOKEN:
+      GITHUB_TOKEN:
         required: true
 
 jobs:
   buildx:
-    # This job will only run if the trigger is NOT a pull_request,
-    # OR if the trigger is a pull_request that has been merged.
-    if: github.event_name != 'pull_request' || github.event.pull_request.merged == true
     runs-on: ubuntu-22.04
     env:
       working-directory: ./packages/nocodb
-      # Set default inputs for the pull_request event. For other events, use the provided inputs.
-      # This avoids errors since pull_request triggers don't have inputs.
-      INPUT_TAG: ${{ (github.event_name == 'pull_request' && 'latest-pr') || github.event.inputs.tag || inputs.tag }}
-      INPUT_TARGET_ENV: ${{ (github.event_name == 'pull_request' && 'DEV') || github.event.inputs.targetEnv || inputs.targetEnv }}
-      INPUT_IS_DAILY: ${{ (github.event_name == 'pull_request' && 'N') || github.event.inputs.isDaily || inputs.isDaily || 'N' }}
-      INPUT_CURRENT_VERSION: ${{ github.event.inputs.currentVersion || inputs.currentVersion }}
     permissions:
       contents: read
       packages: write
@@ -89,18 +70,18 @@ jobs:
         id: get-docker-repository
         run: |
           DOCKER_REPOSITORY=nocodb-daily
-          DOCKER_BUILD_TAG=${{ env.INPUT_TAG }}
+          DOCKER_BUILD_TAG=${{ github.event.inputs.tag || inputs.tag }}
           DOCKER_BUILD_LATEST_TAG=latest
 
           if [[ "$DOCKER_BUILD_TAG" =~ "-beta." ]]; then
             DOCKER_BUILD_LATEST_TAG=$(echo $DOCKER_BUILD_TAG | awk -F '-beta.' '{print $1}')-beta.latest
           fi
 
-          if [[ "${{ env.INPUT_TARGET_ENV }}" == 'DEV' ]]; then
-            if [[ "${{ env.INPUT_CURRENT_VERSION || 'N/A' }}" != 'N/A' ]]; then
-              DOCKER_BUILD_TAG=${{ env.INPUT_CURRENT_VERSION }}-${{ env.INPUT_TAG }}
+          if [[ "${{ github.event.inputs.targetEnv || inputs.targetEnv }}" == 'DEV' ]]; then
+            if [[ "${{ github.event.inputs.currentVersion || inputs.currentVersion || 'N/A' }}" != 'N/A' ]]; then
+              DOCKER_BUILD_TAG=${{ github.event.inputs.currentVersion || inputs.currentVersion }}-${{ github.event.inputs.tag || inputs.tag }}
             fi
-            if [[ "${{ env.INPUT_IS_DAILY }}" == 'Y' ]]; then
+            if [[ "${{ github.event.inputs.isDaily || inputs.isDaily || 'N' }}" == 'Y' ]]; then
               DOCKER_REPOSITORY=nocodb-daily
             else
               DOCKER_REPOSITORY=nocodb-timely
@@ -198,3 +179,5 @@ jobs:
         run: |
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
+
+
