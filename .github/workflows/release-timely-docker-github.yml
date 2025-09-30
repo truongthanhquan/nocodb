@@ -4,7 +4,7 @@
 # 1. Manually via `workflow_dispatch` with specified inputs.
 # 2. Called by other workflows via `workflow_call`.
 
-name: "Release: Timely Docker Github"
+name: "Release: Timely Docker Build"
 
 on:
   # Triggered manually
@@ -41,16 +41,14 @@ on:
         required: true
         type: string
       isDaily:
-        description: "Is it triggered by daily schedule?"
+        description: "Is it triggered by daily schedule"
         required: false
         type: string
       currentVersion:
         description: "The current NocoDB version"
         required: false
         type: string
-    secrets:
-      GITHUB_TOKEN:
-        required: true
+    # GITHUB_TOKEN is automatically available and does not need to be passed as a secret.
 
 jobs:
   buildx:
@@ -179,5 +177,4 @@ jobs:
         run: |
           rm -rf /tmp/.buildx-cache
           mv /tmp/.buildx-cache-new /tmp/.buildx-cache
-
 
