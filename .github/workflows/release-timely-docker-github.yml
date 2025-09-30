@@ -4,7 +4,7 @@
 # 1. Manually via `workflow_dispatch` with specified inputs.
 # 2. Called by other workflows via `workflow_call`.
 
-name: "Release: Timely Docker Build"
+name: "Release: Timely Docker Github"
 
 on:
   # Triggered manually
