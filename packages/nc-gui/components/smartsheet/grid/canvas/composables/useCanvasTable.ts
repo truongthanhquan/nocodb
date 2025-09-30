@@ -9,7 +9,7 @@ import {
   isSystemColumn,
   isVirtualCol,
 } from 'nocodb-sdk'
-import type { ButtonType, ColumnType, TableType, UserType, ViewType } from 'nocodb-sdk'
+import type { ButtonType, ColumnType, FormulaType, TableType, UserType, ViewType } from 'nocodb-sdk'
 import type { WritableComputedRef } from '@vue/reactivity'
 import { SpriteLoader } from '../loaders/SpriteLoader'
 import { ImageWindowLoader } from '../loaders/ImageLoader'
@@ -210,6 +210,7 @@ export function useCanvasTable({
   const { isMobileMode } = useGlobal()
   const { $api } = useNuxtApp()
   const { t } = useI18n()
+  const { currentUser } = useUserSync()
   const { gridViewCols, metaColumnById, updateGridViewColumn } = useViewColumnsOrThrow()
   const {
     eventBus,
@@ -228,7 +229,7 @@ export function useCanvasTable({
   const { activeView } = storeToRefs(useViewsStore())
   const { meta: metaKey, ctrl: ctrlKey } = useMagicKeys()
   const { isDataReadOnly, isUIAllowed } = useRoles()
-  const { isAiFeaturesEnabled, aiIntegrations, generateRows: _generateRows } = useNocoAi()
+  const { isAiFeaturesEnabled, aiIntegrations, isNocoAiAvailable, generateRows: _generateRows } = useNocoAi()
   const automationStore = useAutomationStore()
   const tooltipStore = useTooltipStore()
   const { blockExternalSourceRecordVisibility, blockRowColoring } = useEeConfig()
@@ -261,8 +262,19 @@ export function useCanvasTable({
   const isPublicView = inject(IsPublicInj, ref(false))
   const readOnly = inject(ReadonlyInj, ref(false))
 
+  const { eventBus: scriptEventBus } = useScriptExecutor()
+
   const { loadAutomation } = automationStore
-  const actionManager = new ActionManager($api, loadAutomation, generateRows, meta, triggerRefreshCanvas, getDataCache)
+  const actionManager = new ActionManager(
+    $api,
+    loadAutomation,
+    generateRows,
+    meta,
+    triggerRefreshCanvas,
+    getDataCache,
+    scriptEventBus,
+    currentUser,
+  )
 
   const isGroupBy = computed(() => !!groupByColumns.value?.length)
 
@@ -350,8 +362,15 @@ export function useCanvasTable({
           f.extra.isDisplayTimezone = isEeUI ? meta?.isDisplayTimezone : undefined
         }
         if ([UITypes.Formula].includes(f.uidt)) {
-          if ([UITypes.DateTime].includes((f.meta as any)?.display_type)) {
-            const displayColumnConfig = (f.meta as any)?.display_column_meta as any
+          const referencedColumn = (f.colOptions as FormulaType)?.parsed_tree?.referencedColumn
+          const displayType = (f.meta as any)?.display_type ?? referencedColumn?.uidt
+          const displayColumnConfig = (f.meta as any)?.display_type
+            ? ((f.meta as any)?.display_column_meta as any)
+            : referencedColumn
+            ? meta.value?.columns?.find((c) => c.id === referencedColumn.id)
+            : undefined
+
+          if ([UITypes.DateTime].includes(displayType)) {
             if (displayColumnConfig.meta) {
               const displayColumnConfigMeta = displayColumnConfig.meta
 
@@ -365,13 +384,17 @@ export function useCanvasTable({
               displayColumnConfig.extra = extra
             }
           }
+          f.extra.display_type = displayType
+          f.extra.display_column_meta = displayColumnConfig
         }
 
-        const isInvalid = isColumnInvalid(
-          f,
-          aiIntegrations.value,
-          isPublicView.value || !isDataEditAllowed.value || isSqlView.value,
-        )
+        const isInvalid = isColumnInvalid({
+          col: f,
+          aiIntegrations: aiIntegrations.value,
+          isReadOnly: isPublicView.value || !isDataEditAllowed.value || isSqlView.value,
+          isNocoAiAvailable: isNocoAiAvailable.value,
+          columns: meta.value?.columns as ColumnType[],
+        })
         const sqlUi = sqlUis.value[f.source_id] ?? Object.values(sqlUis.value)[0]
 
         const isCellEditable =

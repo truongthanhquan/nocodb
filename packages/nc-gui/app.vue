@@ -5,7 +5,11 @@ const router = useRouter()
 
 const route = router.currentRoute
 
-const disableBaseLayout = computed(() => route.value.path.startsWith('/nc/view') || route.value.path.startsWith('/nc/form'))
+const { showOnboardingFlow } = useOnboardingFlow()
+
+const disableBaseLayout = computed(
+  () => route.value.path.startsWith('/nc/view') || route.value.path.startsWith('/nc/form') || showOnboardingFlow.value,
+)
 
 const { isExperimentalFeatureModalOpen, initializeFeatures, isFeatureEnabled } = useBetaFeatureToggle()
 
@@ -22,6 +26,8 @@ if (isDarkModeEnabled.value) {
 const { commandPalette, cmdData, cmdPlaceholder, activeScope, loadTemporaryScope } = useCommandPalette()
 
 const { cmdK, cmdL, cmdJ, setActiveCmdView } = useCommand()
+
+useUserSync()
 
 useRealtime()
 

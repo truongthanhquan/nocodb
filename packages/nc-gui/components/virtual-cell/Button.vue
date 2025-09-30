@@ -10,7 +10,7 @@ const column = inject(ColumnInj) as Ref<
 
 const cellValue = inject(CellValueInj, ref())
 
-const { currentRow } = useSmartsheetRowStoreOrThrow()
+const { currentRow, displayValue, changedColumns } = useSmartsheetRowStoreOrThrow()
 
 const { generateRows, generatingRows, generatingColumnRows, generatingColumns, aiIntegrations } = useNocoAi()
 
@@ -35,6 +35,8 @@ const rowId = computed(() => {
 })
 
 const { runScript, activeExecutions, fieldIDRowMapping } = useScriptExecutor()
+
+const { addScriptExecution } = useActionPane()
 
 const automationStore = useAutomationStore()
 
@@ -73,7 +75,8 @@ const generate = async () => {
 
   generatingColumns.value.push(...(outputColumnIds ?? []))
 
-  const res = await generateRows(meta.value.id, column.value.id, [pk.value])
+  // In expanded form get preview data and update local state so that expanded form save btn works properly
+  const res = await generateRows(meta.value.id, column.value.id, [pk.value], false, isExpandedForm.value)
 
   if (res?.length) {
     const resRow = res[0]
@@ -81,6 +84,8 @@ const generate = async () => {
     if (outputColumnIds) {
       for (const col of outputColumns) {
         if (col && currentRow.value.row) {
+          changedColumns.value.add(col.title!)
+
           currentRow.value.row[col.title!] = resRow[col.title!]
         }
       }
@@ -192,12 +197,27 @@ const triggerAction = async () => {
 
       const script = await loadAutomation(colOptions.fk_script_id)
 
-      const id = await runScript(script, currentRow.value.row, {
-        pk: pk.value,
-        fieldId: column.value.id,
+      if (!script) {
+        throw new Error('Script not found')
+      }
+
+      const rowId = pk.value
+
+      const scriptExecutionId = await runScript(script, currentRow.value.row, {
+        pk: rowId!,
+        fieldId: column.value.id!,
+        executionId: `${rowId}-${column.value.id!}-${Date.now()}`,
       })
 
-      isExecutingId.value = id
+      addScriptExecution(scriptExecutionId, {
+        recordId: rowId as string,
+        displayValue: displayValue.value,
+        scriptId: script?.id as string,
+        scriptName: script?.title || 'Untitled Script',
+        buttonFieldName: column.value.title || 'Button',
+      })
+
+      isExecutingId.value = scriptExecutionId
 
       afterActionStatus.value = { status: 'success' }
       ncDelay(2000).then(() => {
@@ -250,9 +270,9 @@ const triggerAction = async () => {
         data-testid="nc-button-cell"
         :class="[
           `${column.colOptions.color ?? 'brand'} ${column.colOptions.theme ?? 'solid'}`,
-          { '!w-6': !column.colOptions.label, 'disabled': componentProps.disabled },
+          { '!w-6': !column.colOptions.label, 'disabled': componentProps.disabled, 'is-expanded-form': isExpandedForm },
         ]"
-        class="nc-cell-button nc-button-cell-link btn-cell-colors truncate flex items-center h-6"
+        class="nc-cell-button nc-button-cell-link btn-cell-colors truncate flex items-center"
         @click.prevent="triggerAction"
       >
         <GeneralIcon
@@ -271,7 +291,7 @@ const triggerAction = async () => {
         />
         <GeneralIcon v-else-if="column.colOptions.icon" :icon="column.colOptions.icon" class="!w-4 min-w-4 min-h-4 !h-4" />
         <NcTooltip v-if="column.colOptions.label" class="!truncate" show-on-truncate-only>
-          <span class="text-[13px] truncate font-medium">
+          <span class="truncate font-medium" :class="{ 'text-sm': isExpandedForm, 'text-[13px]': !isExpandedForm }">
             {{ column.colOptions.label }}
           </span>
           <template #title>
@@ -294,6 +314,10 @@ const triggerAction = async () => {
     }
   }
 
+  &:has(.nc-cell-button.is-expanded-form) {
+    @apply -mt-1 -ml-1;
+  }
+
   .nc-cell-attachment {
     @apply !border-none;
   }
@@ -306,16 +330,24 @@ const triggerAction = async () => {
 
 <style scoped lang="scss">
 .nc-cell-button {
-  @apply rounded-md px-2 flex items-center gap-2 transition-all justify-center;
+  @apply px-2 flex items-center gap-2 transition-all justify-center;
   &:not([class*='text']) {
     box-shadow: 0px 3px 1px -2px rgba(0, 0, 0, 0.06), 0px 5px 3px -2px rgba(0, 0, 0, 0.02);
   }
   &:focus-within {
     @apply outline-none ring-0;
-    box-shadow: 0px 0px 0px 2px #fff, 0px 0px 0px 4px #3069fe;
+    box-shadow: 0px 0px 0px 2px var(--nc-bg-default), 0px 0px 0px 4px #3069fe;
   }
   &[disabled] {
     @apply opacity-50;
+  }
+
+  &.is-expanded-form {
+    @apply h-8 rounded-lg my-1;
+  }
+
+  &:not(.is-expanded-form) {
+    @apply h-6 rounded-md;
   }
 }
 

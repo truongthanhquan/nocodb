@@ -25,6 +25,7 @@ const {
   hideSidebar,
   showTopbar,
   miniSidebarWidth,
+  isFullScreen,
 } = storeToRefs(useSidebarStore())
 
 const { isSharedBase } = storeToRefs(useBase())
@@ -108,6 +109,7 @@ watch(
 function handleMouseMove(e: MouseEvent) {
   if (isMobileMode.value) return
   if (!wrapperRef.value) return
+  if (isFullScreen.value) return
   if (sidebarState.value === 'openEnd') return
 
   if (e.clientX < 4 + miniSidebarWidth.value && ['hiddenEnd', 'peekCloseEnd'].includes(sidebarState.value)) {
@@ -215,7 +217,13 @@ function onResize(widthPercent: any) {
 }
 
 const isMiniSidebarVisible = computed(() => {
-  return !hideMiniSidebar.value && slots.sidebar && !isSharedBase.value && (!isMobileMode.value || isLeftSidebarOpen.value)
+  return (
+    !hideMiniSidebar.value &&
+    slots.sidebar &&
+    !isSharedBase.value &&
+    (!isMobileMode.value || isLeftSidebarOpen.value) &&
+    !isFullScreen.value
+  )
 })
 </script>
 
@@ -226,7 +234,7 @@ const isMiniSidebarVisible = computed(() => {
     <div
       :class="{
         'w-[calc(100vw_-_var(--mini-sidebar-width))] flex-none': isMiniSidebarVisible,
-        'w-screen flex-none': !isMiniSidebarVisible,
+        'nc-w-screen flex-none': !isMiniSidebarVisible,
       }"
     >
       <DashboardTopbar v-if="showTopbar" :workspace-id="workspaceId" />
@@ -235,7 +243,7 @@ const isMiniSidebarVisible = computed(() => {
         :class="{
           'hide-resize-bar': !isLeftSidebarOpen || sidebarState === 'openStart' || hideSidebar,
           '!w-[calc(100vw_-_var(--mini-sidebar-width))]': isMiniSidebarVisible && !isSharedBase,
-          '!w-screen': !isMiniSidebarVisible || isSharedBase,
+          '!nc-w-screen': !isMiniSidebarVisible || isSharedBase,
         }"
         @ready="() => onWindowResize()"
         @resize="(event: any) => onResize(event[0].size)"

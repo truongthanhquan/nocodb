@@ -257,7 +257,7 @@ export function useCanvasRender({
 
     // Regular columns
     ctx.fillStyle = '#6a7184'
-    ctx.font = '550 12px Inter'
+    ctx.font = '600 12px Inter'
     ctx.textBaseline = 'middle'
     ctx.imageSmoothingEnabled = false
 
@@ -3278,10 +3278,12 @@ export function useCanvasRender({
     } else {
       let val = group.value
       try {
-        val = JSON.parse(group.value)
+        const parsedVal = JSON.parse(group.value)
+        val = ncIsObject(parsedVal) || ncIsArray(parsedVal) ? parsedVal : group.value
       } catch (e) {
         val = group.value
       }
+
       renderCell(ctx, group.column, {
         value: val,
         x: x - 11,

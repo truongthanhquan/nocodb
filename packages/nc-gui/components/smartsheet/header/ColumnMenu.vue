@@ -51,11 +51,11 @@ const { t } = useI18n()
 
 const { getMeta } = useMetas()
 
-const { addUndo, defineModelScope, defineViewScope } = useUndoRedo()
+const { addUndo, defineModelScope, defineViewScope, clone } = useUndoRedo()
 
 const showDeleteColumnModal = ref(false)
 
-const { gridViewCols } = useViewColumnsOrThrow()
+const { gridViewCols, fieldsMap, hidingViewColumnsMap } = useViewColumnsOrThrow()
 
 const { fieldsToGroupBy, groupByLimit } = useViewGroupByOrThrow()
 
@@ -286,18 +286,32 @@ const hideOrShowField = async () => {
 
   const viewId = getViewId() as string
 
-  try {
-    const gridViewColumnList = (await $api.dbViewColumn.list(viewId)).list
+  const currentViewColumn = gridViewCols.value[column.value.id!] ? clone(gridViewCols.value[column.value.id!]) : null
 
-    const currentColumn = gridViewColumnList.find((f) => f.fk_column_id === column!.value.id)
+  if (currentViewColumn && currentViewColumn.show && fieldsMap.value[column.value.id!]) {
+    hidingViewColumnsMap.value[column.value.id!] = true
+
+    fieldsMap.value[column.value.id!].show = false
+    updateDefaultViewColVisibility(column?.value.id, false)
+    isOpen.value = false
+  }
+
+  try {
+    const currentColumn =
+      currentViewColumn || (await $api.dbViewColumn.list(viewId)).list.find((f) => f.fk_column_id === column!.value.id)
 
     await $api.dbViewColumn.update(view.value!.id!, currentColumn!.id!, { show: !currentColumn.show })
 
-    if (isExpandedForm.value) {
-      await getMeta(meta?.value?.id as string, true)
-    } else {
-      updateDefaultViewColVisibility(column?.value.id, !currentColumn.show)
+    if (!hidingViewColumnsMap.value[column.value.id!]) {
+      if (isExpandedForm.value) {
+        await getMeta(meta?.value?.id as string, true)
+      } else {
+        updateDefaultViewColVisibility(column?.value.id, !currentColumn.show)
+      }
     }
+
+    // delete current columnId from hidingViewColumnsMap so that while loading view columns, we can use db stored value
+    delete hidingViewColumnsMap.value[column.value.id!]
 
     eventBus.emit(SmartsheetStoreEvents.FIELD_RELOAD)
     if (!currentColumn.show) {
@@ -332,8 +346,6 @@ const hideOrShowField = async () => {
             updateDefaultViewColVisibility(fk_column_id, show)
           }
 
-          await Promise.all(promises)
-
           eventBus.emit(SmartsheetStoreEvents.FIELD_RELOAD)
           reloadDataHook?.trigger()
           if (show) {
@@ -346,11 +358,25 @@ const hideOrShowField = async () => {
     })
   } catch (e: any) {
     console.log('error', e)
-    message.error(t('msg.error.columnVisibilityUpdateFailed'))
-  }
+    if (hidingViewColumnsMap.value[column.value.id!]) {
+      fieldsMap.value[column.value.id!].show = true
+      updateDefaultViewColVisibility(column?.value.id, true)
 
-  isLoading.value = ''
-  isOpen.value = false
+      delete hidingViewColumnsMap.value[column.value.id!]
+
+      eventBus.emit(SmartsheetStoreEvents.FIELD_RELOAD)
+      reloadDataHook?.trigger()
+    }
+
+    message.error(t('msg.error.columnVisibilityUpdateFailed'))
+  } finally {
+    isLoading.value = ''
+    delete hidingViewColumnsMap.value[column.value.id!]
+
+    if (isOpen.value) {
+      isOpen.value = false
+    }
+  }
 }
 
 const handleDelete = () => {
@@ -449,11 +475,14 @@ const linksAssociated = computed(() => {
   )
 })
 
-const addLookupMenu = ref(false)
+const addLookupOrRollupMenu = ref(false)
 
-const openLookupMenuDialog = () => {
+const addLookupOrRollupType = ref<UITypes.Lookup | UITypes.Rollup>(UITypes.Lookup)
+
+const openLookupOrRollupMenuDialog = (type: UITypes.Lookup | UITypes.Rollup) => {
   isOpen.value = false
-  addLookupMenu.value = true
+  addLookupOrRollupMenu.value = true
+  addLookupOrRollupType.value = type
 }
 
 const changeTitleFieldMenu = ref(false)
@@ -630,13 +659,41 @@ const onDeleteColumn = () => {
     </NcTooltip>
 
     <NcMenuItem
-      v-if="[UITypes.LinkToAnotherRecord, UITypes.Links].includes(column.uidt)"
+      v-if="canUseForLookupLinkField(column, meta?.source_id)"
       :disabled="isSqlView"
-      @click="openLookupMenuDialog"
+      @click="openLookupOrRollupMenuDialog(UITypes.Lookup)"
     >
       <div v-e="['a:field:lookup:create']" class="nc-column-lookup-create nc-header-menu-item">
-        <component :is="iconMap.cellLookup" class="opacity-80 !w-4.5 !h-4.5" />
+        <SmartsheetHeaderVirtualCellIcon
+          :column-meta="{
+            uidt: UITypes.Lookup,
+            fk_model_id: column.fk_model_id,
+            colOptions: {
+              fk_relation_column_id: column.id,
+            },
+          }"
+          class="opacity-80 !w-4.5 !h-4.5 !mx-0"
+        />
         {{ t('general.addLookupField') }}
+      </div>
+    </NcMenuItem>
+    <NcMenuItem
+      v-if="canUseForRollupLinkField(column)"
+      :disabled="isSqlView"
+      @click="openLookupOrRollupMenuDialog(UITypes.Rollup)"
+    >
+      <div v-e="['a:field:rollup:create']" class="nc-column-rollup-create nc-header-menu-item">
+        <SmartsheetHeaderVirtualCellIcon
+          :column-meta="{
+            uidt: UITypes.Rollup,
+            fk_model_id: column.fk_model_id,
+            colOptions: {
+              fk_relation_column_id: column.id,
+            },
+          }"
+          class="opacity-80 !w-4.5 !h-4.5 !mx-0"
+        />
+        {{ t('general.addRollupField') }}
       </div>
     </NcMenuItem>
     <NcDivider v-if="isUIAllowed('fieldAlter') && !column?.pv" />
@@ -800,7 +857,7 @@ const onDeleteColumn = () => {
         :column="column"
         :extra="selectedColumnExtra"
       />
-      <LazySmartsheetHeaderAddLookups key="dcx" v-model:value="addLookupMenu" />
+      <LazySmartsheetHeaderAddLookupsOrRollups key="dcx" v-model:value="addLookupOrRollupMenu" :type="addLookupOrRollupType" />
       <LazySmartsheetHeaderUpdateDisplayValue
         key="dcxx"
         v-model:value="changeTitleFieldMenu"
@@ -810,6 +867,7 @@ const onDeleteColumn = () => {
         v-if="column && meta && isEeUI"
         key="dfp"
         v-model:visible="showFieldPermissionsModal"
+        :field="column"
         :field-id="column.id!"
         :field-title="column.title!"
         :field-uidt="column.uidt!"

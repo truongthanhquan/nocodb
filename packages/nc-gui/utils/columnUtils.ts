@@ -7,10 +7,13 @@ import {
   UITypes,
   LongTextAiMetaProp as _LongTextAiMetaProp,
   checkboxIconList,
+  isAIPromptCol,
   isLinksOrLTAR,
   isSystemColumn,
   isValidURL,
+  isVirtualCol,
   ratingIconList,
+  substituteColumnIdWithAliasInPrompt,
   validateEmail,
 } from 'nocodb-sdk'
 import isMobilePhone from 'validator/lib/isMobilePhone'
@@ -280,11 +283,19 @@ const isColumnSupportsGroupBySettings = (colOrUidt: ColumnType) => {
   return [UITypes.SingleSelect, UITypes.User, UITypes.CreatedBy, UITypes.Checkbox, UITypes.Rating].includes(uidt)
 }
 
-const isColumnInvalid = (
-  col: ColumnType,
-  aiIntegrations: Partial<IntegrationType>[] = [],
+const isColumnInvalid = ({
+  col,
+  aiIntegrations = [],
   isReadOnly = false,
-): { isInvalid: boolean; tooltip: string; ignoreTooltip?: boolean } => {
+  isNocoAiAvailable = false,
+  columns = [],
+}: {
+  col: ColumnType
+  aiIntegrations?: Partial<IntegrationType>[]
+  isReadOnly?: boolean
+  isNocoAiAvailable?: boolean
+  columns?: ColumnType[]
+}): { isInvalid: boolean; tooltip: string; ignoreTooltip?: boolean } => {
   const result = {
     isInvalid: false,
     tooltip: 'msg.invalidColumnConfiguration',
@@ -306,26 +317,55 @@ const isColumnInvalid = (
       } else if (colOptions.type === ButtonActionsType.Url) {
         result.isInvalid = !!colOptions.error
       } else if (colOptions.type === ButtonActionsType.Ai) {
-        result.isInvalid =
-          !colOptions.fk_integration_id ||
-          (isReadOnly
-            ? false
-            : !!colOptions.fk_integration_id && !ncIsArrayIncludes(aiIntegrations, colOptions.fk_integration_id, 'id'))
-        result.tooltip = 'title.aiIntegrationMissing'
+        const colOptions = col.colOptions as ButtonType
+
+        const missingIds = substituteColumnIdWithAliasInPrompt(
+          (colOptions as Record<string, any>)?.formula ?? '',
+          columns,
+          (colOptions as Record<string, any>)?.formula_raw,
+        ).missingIds
+
+        const isIntegrationMissing = isNocoAiAvailable
+          ? false
+          : !colOptions.fk_integration_id ||
+            (isReadOnly
+              ? false
+              : !!colOptions.fk_integration_id && !ncIsArrayIncludes(aiIntegrations, colOptions.fk_integration_id, 'id'))
+
+        if (isIntegrationMissing) {
+          result.isInvalid = true
+          result.tooltip = 'title.aiIntegrationMissing'
+        } else if (missingIds.length) {
+          result.isInvalid = true
+          result.tooltip = `Input prompt has deleted column(s): ${missingIds.map((id) => id.title).join(', ')}`
+        }
       }
       break
     }
     case UITypes.LongText: {
-      if (parseProp(col.meta)[LongTextAiMetaProp]) {
+      if (isAIPromptCol(col)) {
         const colOptions = col.colOptions as ButtonType
 
-        result.isInvalid =
-          !colOptions.fk_integration_id ||
-          (isReadOnly
-            ? false
-            : !!colOptions.fk_integration_id && !ncIsArrayIncludes(aiIntegrations, colOptions.fk_integration_id, 'id'))
+        const missingIds = substituteColumnIdWithAliasInPrompt(
+          (colOptions as Record<string, any>)?.prompt ?? '',
+          columns,
+          (colOptions as Record<string, any>)?.prompt_raw,
+        ).missingIds
 
-        result.tooltip = 'title.aiIntegrationMissing'
+        const isIntegrationMissing = isNocoAiAvailable
+          ? false
+          : !colOptions.fk_integration_id ||
+            (isReadOnly
+              ? false
+              : !!colOptions.fk_integration_id && !ncIsArrayIncludes(aiIntegrations, colOptions.fk_integration_id, 'id'))
+
+        if (isIntegrationMissing) {
+          result.isInvalid = true
+          result.tooltip = 'title.aiIntegrationMissing'
+        } else if (missingIds.length) {
+          result.isInvalid = true
+          result.tooltip = `Prompt has deleted column(s): ${missingIds.map((id) => id.title).join(', ')}`
+        }
       }
       break
     }
@@ -385,7 +425,16 @@ const formViewHiddenColTypes = [
   UITypes.CreatedBy,
   UITypes.LastModifiedBy,
   AIButton,
+  AIPrompt,
 ]
+
+const isFormViewHiddenCol = (col: ColumnType | UITypes): boolean => {
+  if (typeof col === 'object') {
+    return formViewHiddenColTypes.includes(col.uidt as UITypes) || isAIPromptCol(col)
+  }
+
+  return formViewHiddenColTypes.includes(col as UITypes)
+}
 
 const columnToValidate = [UITypes.Email, UITypes.URL, UITypes.PhoneNumber]
 
@@ -457,6 +506,49 @@ const disableMakeCellEditable = (col: ColumnType) => {
   return showEditRestrictedColumnTooltip(col) && !isLinksOrLTAR(col)
 }
 
+const canUseForRollupLinkField = (c: ColumnType) => {
+  return (
+    c &&
+    isLinksOrLTAR(c) &&
+    (c.colOptions as LinkToAnotherRecordType)?.type &&
+    ![RelationTypes.BELONGS_TO, RelationTypes.ONE_TO_ONE].includes(
+      (c.colOptions as LinkToAnotherRecordType)?.type as RelationTypes,
+    ) &&
+    // exclude system columns
+    (!c.system ||
+      // include system columns if it's self-referencing, mm, oo and bt are self-referencing
+      // hm is only used for LTAR with junction table
+      [RelationTypes.MANY_TO_MANY, RelationTypes.ONE_TO_ONE, RelationTypes.BELONGS_TO].includes(
+        (c.colOptions as LinkToAnotherRecordType)?.type as RelationTypes,
+      ))
+  )
+}
+
+const canUseForLookupLinkField = (c: ColumnType, metaSourceId?: string) => {
+  return (
+    c &&
+    isLinksOrLTAR(c) &&
+    // exclude system columns
+    (!c.system ||
+      // include system columns if it's self-referencing, mm, oo and bt are self-referencing
+      // hm is only used for LTAR with junction table
+      [RelationTypes.MANY_TO_MANY, RelationTypes.ONE_TO_ONE, RelationTypes.BELONGS_TO].includes(
+        (c.colOptions as LinkToAnotherRecordType)?.type as RelationTypes,
+      )) &&
+    c.source_id === metaSourceId
+  )
+}
+
+const getValidRollupColumn = (c: ColumnType) => {
+  return (
+    (!isVirtualCol(c.uidt as UITypes) ||
+      [UITypes.CreatedTime, UITypes.CreatedBy, UITypes.LastModifiedTime, UITypes.LastModifiedBy, UITypes.Formula].includes(
+        c.uidt as UITypes,
+      )) &&
+    (!isSystemColumn(c) || c.pk)
+  )
+}
+
 export {
   uiTypes,
   isTypableInputColumn,
@@ -472,6 +564,7 @@ export {
   extractCheckboxIcon,
   extractRatingIcon,
   formViewHiddenColTypes,
+  isFormViewHiddenCol,
   columnToValidate,
   getColumnValidationError,
   getFormulaColDataType,
@@ -479,4 +572,7 @@ export {
   showReadonlyColumnTooltip,
   showEditRestrictedColumnTooltip,
   disableMakeCellEditable,
+  canUseForRollupLinkField,
+  canUseForLookupLinkField,
+  getValidRollupColumn,
 }

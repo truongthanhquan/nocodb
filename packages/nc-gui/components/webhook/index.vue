@@ -1,5 +1,6 @@
 <script setup lang="ts">
-import { type HookReqType, type HookTestReqType, type HookType, PlanLimitTypes } from 'nocodb-sdk'
+import { diff } from 'deep-object-diff'
+import { type HookReqType, type HookTestReqType, type HookType, PlanLimitTypes, hasInputCalls } from 'nocodb-sdk'
 import type { Ref } from 'vue'
 import { onKeyDown } from '@vueuse/core'
 import { UITypes, isLinksOrLTAR, isSystemColumn, isVirtualCol } from 'nocodb-sdk'
@@ -33,6 +34,8 @@ const { api, isLoading: loading } = useApi()
 
 const modalVisible = useVModel(props, 'value')
 
+const { clone } = useUndoRedo()
+
 const { hooks } = storeToRefs(useWebhooksStore())
 
 const { base } = storeToRefs(useBase())
@@ -46,6 +49,8 @@ const { appInfo } = useGlobal()
 const { activeTable } = toRefs(useTablesStore())
 
 const { updateStatLimit, showWebhookLogsFeatureAccessModal } = useEeConfig()
+
+const { activeBaseAutomations } = storeToRefs(useAutomationStore())
 
 const defaultHookName = t('labels.webhook')
 
@@ -87,10 +92,14 @@ const eventsEnum = computed(() => {
   return result
 })
 
+const oldHookRef = ref<HookType | undefined>()
+
 let hookRef = reactive<
   Omit<HookType, 'notification'> & {
     notification: Record<string, any> & {
       include_user: boolean
+      trigger_form?: boolean
+      trigger_form_id?: string
     }
     eventOperation?: string
     condition: boolean
@@ -123,12 +132,20 @@ let hookRef = reactive<
       ],
       path: '',
     },
+    trigger_form: false,
+    trigger_form_id: undefined,
   },
   condition: false,
   trigger_field: false,
   trigger_fields: [],
   active: true,
   version: 'v3',
+})
+
+const hasUnsavedChanges = computed(() => {
+  if (!props.hook || !hookRef.id || !oldHookRef.value || !hookRef) return true
+
+  return !ncIsEmptyObject(diff(removeUndefinedFromObj(oldHookRef.value), removeUndefinedFromObj(hookRef)))
 })
 
 const operationsEnum = computed(() => {
@@ -170,6 +187,26 @@ const isDropdownOpen = ref()
 
 const titleDomRef = ref<HTMLInputElement | undefined>()
 
+const notificationTypes = ref([
+  {
+    type: 'URL',
+    label: 'HTTP Webhook',
+  },
+  {
+    type: 'Script',
+    label: 'Run Script',
+  },
+])
+
+const automationOptions = computed(() => {
+  return activeBaseAutomations.value
+    .filter((automation) => automation.script && !hasInputCalls(automation.script))
+    .map((automation) => ({
+      label: automation.title,
+      value: automation.id,
+    }))
+})
+
 const toggleOperation = (operation: string) => {
   const ops = [...hookRef.operation]
   const index = ops?.indexOf(operation) ?? -1
@@ -183,6 +220,10 @@ const toggleOperation = (operation: string) => {
     hookRef.trigger_field = false
     hookRef.trigger_fields = []
   }
+  if (!ops.includes('insert')) {
+    hookRef.notification.trigger_form = false
+    hookRef.notification.trigger_form_id = undefined
+  }
   hookRef.operation = ops // this will trigger hookRef.operation watch
   // event other than 'after' has no 'send me everything'
   sendMeEverythingChecked.value = hookRef.event === 'after' && ops?.length === operationsEnum.value?.length
@@ -194,6 +235,8 @@ const toggleSendMeEverythingChecked = (_evt: Event) => {
   if (!sendMeEverythingChecked.value) {
     hookRef.trigger_field = false
     hookRef.trigger_fields = []
+    hookRef.notification.trigger_form = false
+    hookRef.notification.trigger_form_id = undefined
   }
 }
 const handleEventChange = (e: string) => {
@@ -204,6 +247,8 @@ const handleEventChange = (e: string) => {
     hookRef.operation = ['trigger']
     hookRef.trigger_field = false
     hookRef.trigger_fields = []
+    hookRef.notification.trigger_form = false
+    hookRef.notification.trigger_form_id = undefined
   }
 
   // Automatically set active to true when event type is manual
@@ -390,6 +435,9 @@ const validators = computed(() => {
       'notification.payload.body': [fieldRequiredValidator()],
       'notification.payload.to': [fieldRequiredValidator()],
     }),
+    ...(hookRef.notification.type === 'Script' && {
+      'notification.payload.scriptId': [fieldRequiredValidator()],
+    }),
   }
 })
 const { validate, validateInfos } = useForm(hookRef, validators)
@@ -430,12 +478,17 @@ function onNotificationTypeChange(reset = false) {
     mattermostChannels.value = getChannelsArray(apps?.value?.Mattermost?.parsedInput)
   }
 
+  if (hookRef.notification.type === 'Script') {
+    hookRef.notification.payload.scriptId = hookRef.notification.payload.scriptId || undefined
+  }
+
   if (hookRef.notification.type === 'URL') {
     const body = hookRef.notification.payload.body
     hookRef.notification.payload.body = body ? (body === '{{ json data }}' ? '{{ json event }}' : body) : '{{ json event }}'
     hookRef.notification.payload.parameters = hookRef.notification.payload.parameters || [{}]
     hookRef.notification.payload.headers = hookRef.notification.payload.headers || [{}]
     hookRef.notification.payload.method = hookRef.notification.payload.method || 'POST'
+    hookRef.notification.payload.path = hookRef.notification.payload.path || ''
     hookRef.notification.payload.auth = hookRef.notification.payload.auth ?? ''
   }
 }
@@ -469,6 +522,8 @@ function setHook(newHook: HookType) {
   }
 
   hookRef.trigger_field = !!hookRef?.trigger_field
+
+  oldHookRef.value = clone(hookRef)
 
   loadSampleData()
 }
@@ -559,6 +614,10 @@ async function saveHooks() {
     if (hookRef.operation?.length === 0 && sendMeEverythingChecked.value === false) {
       message.error('At least one operation need to be selected')
       throw new Error('At least one operation need to be selected')
+    }
+    if (hookRef.notification.trigger_form && !hookRef.notification.trigger_form_id) {
+      message.error('You must select a trigger form')
+      throw new Error('You must select a trigger form')
     }
   } catch (error: any) {
     console.error('validation error', error)
@@ -897,11 +956,19 @@ const webhookV2AndV3Diff = computed(() => {
 
         <div class="flex justify-end items-center gap-3 flex-1">
           <template v-if="activeTab === HookTab.Configuration">
-            <NcTooltip v-if="!showUpgradeModal" :disabled="!testConnectionError">
-              <template #title>
+            <NcTooltip v-if="!showUpgradeModal" :disabled="!testConnectionError && hookRef.notification.type !== 'Script'">
+              <template v-if="hookRef.notification.type === 'Script'" #title> Test webhook is disabled for scripts </template>
+              <template v-else #title>
                 {{ testConnectionError }}
               </template>
-              <NcButton :loading="isTestLoading" type="secondary" size="small" icon-position="right" @click="testWebhook">
+              <NcButton
+                :loading="isTestLoading"
+                type="secondary"
+                size="small"
+                icon-position="right"
+                :disabled="hookRef.notification.type === 'Script'"
+                @click="testWebhook"
+              >
                 <template #icon>
                   <GeneralIcon v-if="testSuccess" icon="circleCheckSolid" class="!text-green-700 w-4 h-4 flex-none" />
                   <GeneralIcon
@@ -919,7 +986,14 @@ const webhookV2AndV3Diff = computed(() => {
               {{ $t('general.cancel') }}
             </NcButton>
 
-            <NcButton :loading="loading" type="primary" size="small" data-testid="nc-save-webhook" @click.stop="saveHooks">
+            <NcButton
+              :loading="loading"
+              type="primary"
+              size="small"
+              :disabled="!hasUnsavedChanges"
+              data-testid="nc-save-webhook"
+              @click.stop="saveHooks"
+            >
               {{
                 showUpgradeModal
                   ? $t('general.upgrade')
@@ -1172,13 +1246,63 @@ const webhookV2AndV3Diff = computed(() => {
                       :columns="triggerByFieldColumns"
                     />
                   </div>
+
+                  <div
+                    v-if="isEeUI && meta?.id && hookRef.event === 'after' && hookRef.operation?.includes('insert')"
+                    v-bind="validateInfos['notification.trigger_form_id']"
+                    class="w-full mb-4"
+                  >
+                    <WebhookTriggerByForm
+                      v-model:trigger-form="hookRef.notification.trigger_form"
+                      v-model:trigger-form-id="hookRef.notification.trigger_form_id"
+                      :table-id="meta.id"
+                    />
+                  </div>
                 </div>
 
                 <div class="text-nc-content-gray text-base mt-6 font-bold leading-6">
                   {{ $t('general.action') }}
                 </div>
 
-                <div class="mt-3 border-1 custom-select border-nc-border-gray-medium p-4 border-b-0 rounded-t-2xl">
+                <div
+                  class="mt-3 border-1 custom-select border-nc-border-gray-medium p-4"
+                  :class="{
+                    'rounded-t-2xl border-b-0': hookRef.notification.type !== 'Script',
+                    'rounded-2xl': hookRef.notification.type === 'Script',
+                  }"
+                >
+                  <div v-if="isEeUI" class="flex w-full my-3">
+                    <a-form-item v-bind="validateInfos['notification.type']" class="w-full">
+                      <NcSelect
+                        v-model:value="hookRef.notification.type"
+                        class="w-full nc-select-shadow nc-select-hook-notification-type"
+                        data-testid="nc-dropdown-hook-notification-type"
+                        @change="onNotificationTypeChange(true)"
+                      >
+                        <a-select-option v-for="type in notificationTypes" :key="type.type" :value="type.type">
+                          <div class="flex items-center">
+                            <component :is="iconMap[type.type]" class="text-gray-700 mr-2" />
+                            {{ type.label }}
+                          </div>
+                        </a-select-option>
+                      </NcSelect>
+                    </a-form-item>
+                  </div>
+
+                  <template v-if="isEeUI && hookRef.notification.type === 'Script'">
+                    <a-form-item class="flex w-full my-3" v-bind="validateInfos['notification.payload.scriptId']">
+                      <NcSelect
+                        v-model:value="hookRef.notification.payload.scriptId"
+                        :options="automationOptions"
+                        class="w-full nc-select-shadow nc-select-hook-scrip-type"
+                        data-testid="nc-dropdown-hook-notification-type"
+                        placeholder="Select a script"
+                        show-search
+                        :filter-option="(input, option) => antSelectFilterOption(input, option, ['label'])"
+                      ></NcSelect>
+                    </a-form-item>
+                  </template>
+
                   <template v-if="hookRef.notification.type === 'URL'">
                     <div class="flex gap-3">
                       <a-form-item class="w-1/3">
@@ -1187,6 +1311,8 @@ const webhookV2AndV3Diff = computed(() => {
                           size="medium"
                           class="nc-select-hook-url-method"
                           dropdown-class-name="nc-dropdown-hook-notification-url-method"
+                          show-search
+                          :filter-option="(input, option) => antSelectFilterOption(input, option, ['value'])"
                         >
                           <template #suffixIcon>
                             <GeneralIcon icon="arrowDown" class="text-gray-700" />
@@ -1337,7 +1463,7 @@ const webhookV2AndV3Diff = computed(() => {
                 </div>
               </div>
 
-              <div v-if="isEeUI">
+              <div v-if="isEeUI && hookRef.notification.type !== 'Script'">
                 <div>
                   <div class="w-full cursor-pointer flex items-center" @click.prevent="toggleIncludeUser">
                     <NcSwitch :checked="Boolean(hookRef.notification.include_user)" class="nc-check-box-include-user">
@@ -1375,7 +1501,7 @@ const webhookV2AndV3Diff = computed(() => {
                 </div>
               </a-form-item>
 
-              <div>
+              <div v-if="hookRef.notification.type !== 'Script'">
                 <NcDivider />
                 <div class="flex items-center justify-between -ml-1.5 !mt-[32px]">
                   <NcButton type="text" class="mb-3" size="small" @click="toggleSamplePayload()">
@@ -1561,6 +1687,10 @@ const webhookV2AndV3Diff = computed(() => {
   :deep(.ant-select) {
     .ant-select-selector {
       @apply !h-9;
+
+      .ant-select-selection-placeholder {
+        @apply leading-[36px];
+      }
     }
 
     .ant-select-selection-item {
@@ -1699,5 +1829,9 @@ const webhookV2AndV3Diff = computed(() => {
       @apply flex-1 flex overflow-hidden;
     }
   }
+}
+
+:deep(.nc-filter-field-select .ant-select-selector .field-selection-tooltip-wrapper) {
+  @apply !max-w-none;
 }
 </style>

@@ -63,7 +63,7 @@ const isExpandedFormOpen = inject(IsExpandedFormOpenInj, ref(false))
 
 const { currentRow, state } = useSmartsheetRowStoreOrThrow()
 
-const { sqlUis } = storeToRefs(useBase())
+const baseStore = useBase()
 
 const { generatingRows, generatingColumns } = useNocoAi()
 
@@ -79,9 +79,7 @@ const isGenerating = computed(
     pk.value && column.value.id && generatingRows.value.includes(pk.value) && generatingColumns.value.includes(column.value.id),
 )
 
-const sourceId = meta.value?.source_id || column.value?.source_id
-
-const sqlUi = ref(sourceId && sqlUis.value[sourceId] ? sqlUis.value[sourceId] : Object.values(sqlUis.value)[0])
+const sqlUi = computed(() => baseStore.getSqlUiBySourceId(meta.value?.source_id || column.value?.source_id))
 
 const abstractType = computed(() => column.value && sqlUi.value.getAbstractType(column.value))
 
@@ -314,7 +312,7 @@ const cellClassName = computed(() => {
     @keydown.shift.enter.exact="navigate(NavigateDir.PREV, $event)"
   >
     <template v-if="column">
-      <div v-if="isGenerating" class="flex items-center gap-2 w-full">
+      <div v-if="isGenerating" class="nc-cell-field flex items-center gap-2 w-full">
         <GeneralLoader />
         <NcTooltip class="truncate max-w-[calc(100%_-_24px)]" show-on-truncate-only>
           <template #title> {{ $t('general.generating') }} </template>
@@ -522,6 +520,10 @@ const cellClassName = computed(() => {
 
   :deep(.nc-cell-field) {
     @apply px-0;
+  }
+
+  &:has(.nc-currency-code) {
+    @apply !py-0 !pl-0 flex items-stretch;
   }
 }
 </style>

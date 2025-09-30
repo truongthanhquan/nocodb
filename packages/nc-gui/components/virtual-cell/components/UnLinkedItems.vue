@@ -207,6 +207,9 @@ watch(expandedFormDlg, () => {
 })
 
 watch(filterQueryRef, () => {
+  // Don't focus input on open dropdown in mobile mode
+  if (isMobileMode.value) return
+
   filterQueryRef.value?.focus()
 })
 
@@ -313,6 +316,9 @@ watch(childrenExcludedListPagination, () => {
 onMounted(() => {
   window.addEventListener('keydown', linkedShortcuts)
   loadRelatedTableMeta()
+
+  // Don't focus input on open dropdown in mobile mode
+  if (isMobileMode.value) return
   setTimeout(() => {
     filterQueryRef.value?.focus()
   }, 100)
@@ -433,6 +439,7 @@ const handleKeyDown = (e: KeyboardEvent) => {
                 v-for="(refRow, id) in childrenExcludedList?.list ?? []"
                 :key="id"
                 :attachment="attachmentCol"
+                :display-value-column="relatedTableDisplayValueColumn"
                 :display-value-type-and-format-prop="displayValueTypeAndFormatProp"
                 :fields="fields"
                 :is-linked="isChildrenExcludedListLinked[Number.parseInt(id)]"

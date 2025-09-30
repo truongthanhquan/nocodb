@@ -1,5 +1,5 @@
 <script lang="ts" setup>
-import { type BoolType, type ColumnType } from 'nocodb-sdk'
+import type { BoolType, ColumnType, MetaType } from 'nocodb-sdk'
 
 interface Props {
   column: ColumnType
@@ -7,12 +7,15 @@ interface Props {
   bold?: BoolType
   italic?: BoolType
   underline?: BoolType
+  meta?: MetaType
   showTooltip?: boolean
 }
 
 const props = defineProps<Props>()
 
-const meta = inject(MetaInj)
+const _meta = inject(MetaInj, ref())
+
+const meta = computed(() => props.meta || _meta.value)
 
 const { t } = useI18n()
 
@@ -20,7 +23,7 @@ const { metas } = useMetas()
 
 const column = toRef(props, 'column')
 
-const { sqlUis } = storeToRefs(useBase())
+const baseStore = useBase()
 
 const basesStore = useBases()
 
@@ -28,11 +31,7 @@ const { basesUser } = storeToRefs(basesStore)
 
 const { isXcdbBase, isMysql } = useBase()
 
-const sqlUi = ref(
-  column.value?.source_id && sqlUis.value[column.value?.source_id]
-    ? sqlUis.value[column.value?.source_id]
-    : Object.values(sqlUis.value)[0],
-)
+const sqlUi = computed(() => baseStore.getSqlUiBySourceId(column.value?.source_id))
 
 const abstractType = computed(() => column.value && sqlUi.value.getAbstractType(column.value))
 

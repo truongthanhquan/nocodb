@@ -11,6 +11,8 @@ export const useEeConfig = createSharedComposable(() => {
 
   const { appInfo } = useGlobal()
 
+  const isOrgBilling = ref(false)
+
   const isSideBannerExpanded = ref(false)
 
   const isPaidPlan = computed(() => false)
@@ -29,7 +31,7 @@ export const useEeConfig = createSharedComposable(() => {
 
   const isRecordLimitReached = computed(() => false)
 
-  const gracePeriodDaysLeft = computed(() => Infinity)
+  const gracePeriodActive = computed(() => true)
 
   const gracePeriodEndDate = computed(() => '')
 
@@ -55,9 +57,13 @@ export const useEeConfig = createSharedComposable(() => {
 
   const blockTableAndFieldPermissions = computed(() => true)
 
-  const blockUseScripts = computed(() => false)
-
   const blockPrivateBases = computed(() => true)
+
+  const blockAddNewDashboard = computed(() => true)
+
+  const blockCalendarRange = computed(() => true)
+
+  const blockAddNewScript = computed(() => true)
 
   const showUserMayChargeAlert = computed(() => false)
 
@@ -65,6 +71,10 @@ export const useEeConfig = createSharedComposable(() => {
     // Keeping 50 to keep backward fallback compatibility
     return Math.max(1, +appInfo.value.ncMaxAttachmentsAllowed || 50)
   })
+
+  const blockAiPromptField = computed(() => true)
+
+  const blockAiButtonField = computed(() => true)
 
   const calculatePrice = (..._args: any[]) => {}
 
@@ -116,11 +126,19 @@ export const useEeConfig = createSharedComposable(() => {
 
   const showUpgradeToUseTableAndFieldPermissions = (..._args: any[]) => {}
 
-  const showUpgradeToUseScripts = (..._args: any[]) => {}
-
   const showUpgradeToUsePrivateBases = (..._args: any[]) => {}
 
   const showUpgradeToAddMoreAttachmentsInCell = (..._args: any[]) => {}
+
+  const showDashboardPlanLimitExceededModal = (..._args: any[]) => {}
+
+  const showScriptPlanLimitExceededModal = (..._args: any[]) => {}
+
+  const showUpgradeToUseCalendarRange = (..._args: any[]) => {}
+
+  const showUpgradeToUseAiPromptField = (..._args: any[]) => {}
+
+  const showUpgradeToUseAiButtonField = (..._args: any[]) => {}
 
   return {
     calculatePrice,
@@ -138,7 +156,7 @@ export const useEeConfig = createSharedComposable(() => {
     isPaymentEnabled,
     showUserPlanLimitExceededModal,
     isRecordLimitReached,
-    gracePeriodDaysLeft,
+    gracePeriodActive,
     blockAddNewRecord,
     showRecordPlanLimitExceededModal,
     navigateToBilling,
@@ -170,12 +188,21 @@ export const useEeConfig = createSharedComposable(() => {
     showUpgradeToUseRowColoring,
     blockTableAndFieldPermissions,
     showUpgradeToUseTableAndFieldPermissions,
-    blockUseScripts,
-    showUpgradeToUseScripts,
     blockPrivateBases,
     showUpgradeToUsePrivateBases,
     showUserMayChargeAlert,
     maxAttachmentsAllowedInCell,
     showUpgradeToAddMoreAttachmentsInCell,
+    showDashboardPlanLimitExceededModal,
+    showScriptPlanLimitExceededModal,
+    blockAddNewScript,
+    blockAddNewDashboard,
+    blockCalendarRange,
+    showUpgradeToUseCalendarRange,
+    isOrgBilling,
+    blockAiPromptField,
+    showUpgradeToUseAiPromptField,
+    blockAiButtonField,
+    showUpgradeToUseAiButtonField,
   }
 })

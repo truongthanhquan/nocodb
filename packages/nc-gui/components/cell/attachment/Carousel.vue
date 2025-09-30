@@ -147,7 +147,7 @@ const initEmblaApi = (val: any) => {
       <div
         v-if="selectedFile"
         ref="container"
-        class="flex w-full overflow-hidden justify-center text-center relative h-screen items-center"
+        class="flex w-full overflow-hidden justify-center text-center relative nc-h-screen items-center"
       >
         <NcButton
           class="top-5 !absolute cursor-pointer !z-30 !hover:bg-transparent left-5"
@@ -270,38 +270,14 @@ const initEmblaApi = (val: any) => {
                 @click="onThumbClick(index)"
               >
                 <div class="flex items-center justify-center">
-                  <LazyCellAttachmentPreviewImage
-                    v-if="isImage(item.title, item.mimetype)"
+                  <LazyCellAttachmentPreviewThumbnail
                     class="nc-attachment-img-wrapper h-12"
+                    :attachment="item"
+                    thumbnail="tiny"
                     object-fit="contain"
                     :alt="item.title"
-                    :srcs="getPossibleAttachmentSrc(item, 'tiny')"
                     @error="triggerReload"
                   />
-                  <div
-                    v-else-if="isVideo(item.title, item.mimetype)"
-                    class="h-full flex items-center h-6 justify-center rounded-md px-2 py-1 border-1 border-gray-200"
-                  >
-                    <GeneralIcon class="text-white" icon="play" />
-                  </div>
-
-                  <div
-                    v-else-if="isAudio(item.title, item.mimetype)"
-                    class="h-full flex items-center h-6 justify-center rounded-md px-2 py-1 border-1 border-gray-200"
-                  >
-                    <GeneralIcon class="text-white" icon="ncVolume2" />
-                  </div>
-
-                  <div
-                    v-else-if="isPdf(item.title, item.mimetype)"
-                    class="h-full flex items-center h-6 justify-center rounded-md px-2 py-1 border-1 border-gray-200"
-                  >
-                    <GeneralIcon class="text-white" icon="pdfFile" />
-                  </div>
-
-                  <div v-else class="h-full flex items-center h-6 justify-center rounded-md px-2 py-1 border-1 border-gray-200">
-                    <GeneralIcon class="text-white" icon="file" />
-                  </div>
                 </div>
               </NcCarouselItem>
             </NcCarouselContent>
