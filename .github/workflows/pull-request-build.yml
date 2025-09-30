@@ -14,10 +14,13 @@ jobs:
   trigger-build:
     # This job will only run if the pull_request that has been merged.
     if: github.event.pull_request.merged == true
-    uses: ./.github/workflows/release-timely-docker-github.yml
+    permissions:
+      contents: read
+      packages: write
+    uses: ./.github/workflows/release-timely-docker.yml
     with:
-      tag: 'latest'
+      tag: 'latest-pr'
       targetEnv: 'DEV'
       isDaily: 'N'
-    secrets:
-      GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+    secrets: inherit
+
