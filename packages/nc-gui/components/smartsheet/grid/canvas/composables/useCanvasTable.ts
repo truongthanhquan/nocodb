@@ -14,6 +14,7 @@ import type { ButtonType, ColumnType, FormulaType, TableType, UserType, ViewType
 import type { WritableComputedRef } from '@vue/reactivity'
 import { SpriteLoader } from '../loaders/SpriteLoader'
 import { ImageWindowLoader } from '../loaders/ImageLoader'
+import { MarkdownLoader } from '../loaders/markdownLoader'
 import { getSingleMultiselectColOptions, getUserColOptions, parseCellWidth } from '../utils/cell'
 import { clearRowColouringCache, clearTextCache } from '../utils/canvas'
 import {
@@ -174,6 +175,7 @@ export function useCanvasTable({
   const { metas, getMeta, getPartialMeta } = useMetas()
   const { getBaseRoles } = useBases()
   const { isAllowed } = usePermissions()
+  const { getColor } = useTheme()
   const rowSlice = ref({ start: 0, end: 0 })
   const colSlice = ref({ start: 0, end: 0 })
   const activeCell = ref<{
@@ -195,8 +197,7 @@ export function useCanvasTable({
   const attachmentCellDropOver = ref<AttachmentCellDropOverType | null>(null)
   const spriteLoader = new SpriteLoader(() => triggerRefreshCanvas())
   const imageLoader = new ImageWindowLoader(() => triggerRefreshCanvas())
-  const tableMetaLoader = new TableMetaLoader(getMeta, () => triggerRefreshCanvas)
-  const baseRoleLoader = new BaseRoleLoader(getBaseRoles, () => triggerRefreshCanvas)
+  const markdownLoader = new MarkdownLoader(() => triggerRefreshCanvas())
   const reloadVisibleDataHook = inject(ReloadVisibleDataHookInj, undefined)
   const reloadViewDataHook = inject(ReloadViewDataHookInj, createEventHook())
   const elementMap = new CanvasElement([])
@@ -228,13 +229,18 @@ export function useCanvasTable({
     isExternalSource,
     isAlreadyShownUpgradeModal,
     gridEditEnabled,
+    isViewOperationsAllowed,
   } = useSmartsheetStoreOrThrow()
+
+  // Initialize loaders that need meta.base_id after meta is available
+  const tableMetaLoader = new TableMetaLoader(getMeta, () => triggerRefreshCanvas, (meta.value as TableType)?.base_id)
+  const baseRoleLoader = new BaseRoleLoader(getBaseRoles, () => triggerRefreshCanvas)
   const { addUndo, defineViewScope } = useUndoRedo()
   const { activeView } = storeToRefs(useViewsStore())
   const { meta: metaKey, ctrl: ctrlKey } = useMagicKeys()
   const { isDataReadOnly, isUIAllowed } = useRoles()
   const { isAiFeaturesEnabled, aiIntegrations, isNocoAiAvailable, generateRows: _generateRows } = useNocoAi()
-  const automationStore = useAutomationStore()
+  const scriptStore = useScriptStore()
   const tooltipStore = useTooltipStore()
   const { blockExternalSourceRecordVisibility, blockRowColoring } = useEeConfig()
   const { isRowColouringEnabled } = useViewRowColorRender()
@@ -268,10 +274,10 @@ export function useCanvasTable({
 
   const { eventBus: scriptEventBus } = useScriptExecutor()
 
-  const { loadAutomation } = automationStore
+  const { loadScript } = scriptStore
   const actionManager = new ActionManager(
     $api,
-    loadAutomation,
+    loadScript,
     generateRows,
     meta,
     triggerRefreshCanvas,
@@ -279,6 +285,11 @@ export function useCanvasTable({
     scriptEventBus,
     currentUser,
   )
+
+  // Set base information for internal API calls
+  if (baseStore.base?.id && baseStore.base?.fk_workspace_id) {
+    actionManager.setBaseInfo(baseStore.base.id, baseStore.base.fk_workspace_id)
+  }
 
   const isGroupBy = computed(() => !!groupByColumns.value?.length)
 
@@ -300,7 +311,7 @@ export function useCanvasTable({
 
   const isFieldEditAllowed = computed(() => isUIAllowed('fieldAdd'))
 
-  const isRowDraggingEnabled = computed(() => isOrderColumnExists.value && !isRowReorderDisabled.value)
+  const isRowDraggingEnabled = computed(() => isOrderColumnExists.value && !isRowReorderDisabled.value && !isMobileMode.value)
 
   const isAddingEmptyRowAllowed = computed(() => isDataEditAllowed.value && !meta.value?.synced)
 
@@ -310,16 +321,25 @@ export function useCanvasTable({
 
   const isAddingColumnAllowed = computed(() => !readOnly.value && isFieldEditAllowed.value && !isSqlView.value)
 
-  const rowHeight = computed(() => (isMobileMode.value ? 56 : rowHeightInPx[`${rowHeightEnum?.value ?? 1}`] ?? 32))
+  const rowHeight = computed(() => (isMobileMode.value ? 40 : rowHeightInPx[`${rowHeightEnum?.value ?? 1}`] ?? 32))
 
   const partialRowHeight = computed(() => scrollTop.value % rowHeight.value)
+
+  const headerRowHeight = computed(() => (isMobileMode.value ? 40 : COLUMN_HEADER_HEIGHT_IN_PX))
 
   const isAiFillMode = computed(() => (isMac() ? !!metaKey?.value : !!ctrlKey?.value) && isAiFeaturesEnabled.value)
 
   const fetchMetaIds = ref<string[][]>([])
+  const isLoadingMetas = ref(false)
 
   const columns = computed<CanvasGridColumn[]>(() => {
-    const fetchMetaIdsLocal: string[] = []
+    // Early return if meta is not available yet
+    if (!meta.value?.base_id) {
+      return []
+    }
+
+    const baseId = meta.value.base_id
+    const fetchMetaIdsLocal: Array<[string, string, string]> = [] // [columnId, tableId, baseId]
     const cols = fields.value
       .map((f) => {
         if (!f.id) return false
@@ -333,23 +353,30 @@ export function useCanvasTable({
          */
         f.extra = {}
         if ([UITypes.Lookup, UITypes.Rollup].includes(f.uidt)) {
-          relatedColObj = metas.value?.[f.fk_model_id!]?.columns?.find(
+          const lookupMetaKey = `${baseId}:${f.fk_model_id!}`
+          relatedColObj = metas.value?.[lookupMetaKey]?.columns?.find(
             (c) => c.id === f?.colOptions?.fk_relation_column_id,
           ) as ColumnType
 
           if (relatedColObj && relatedColObj.colOptions?.fk_related_model_id) {
-            if (!metas.value?.[relatedColObj.colOptions.fk_related_model_id]) {
-              fetchMetaIdsLocal.push([relatedColObj.id, relatedColObj.colOptions.fk_related_model_id])
+            // For cross-base links, use fk_related_base_id, otherwise use current baseId
+            const relatedBaseId = (relatedColObj.colOptions as any)?.fk_related_base_id || baseId
+            const relatedMetaKey = `${relatedBaseId}:${relatedColObj.colOptions.fk_related_model_id}`
+            if (!metas.value?.[relatedMetaKey]) {
+              fetchMetaIdsLocal.push([relatedColObj.id, relatedColObj.colOptions.fk_related_model_id, relatedBaseId])
             } else {
-              relatedTableMeta = metas.value?.[relatedColObj.colOptions.fk_related_model_id]
+              relatedTableMeta = metas.value?.[relatedMetaKey]
             }
           }
         } else if (isLTAR(f.uidt, f.colOptions)) {
           if (f.colOptions?.fk_related_model_id) {
-            if (!metas.value?.[f.colOptions.fk_related_model_id]) {
-              fetchMetaIdsLocal.push([f.id, f.colOptions.fk_related_model_id])
+            // For cross-base links, use fk_related_base_id, otherwise use current baseId
+            const relatedBaseId = (f.colOptions as any)?.fk_related_base_id || baseId
+            const ltarMetaKey = `${relatedBaseId}:${f.colOptions.fk_related_model_id}`
+            if (!metas.value?.[ltarMetaKey]) {
+              fetchMetaIdsLocal.push([f.id, f.colOptions.fk_related_model_id, relatedBaseId])
             } else {
-              relatedTableMeta = metas.value?.[f.colOptions.fk_related_model_id]
+              relatedTableMeta = metas.value?.[ltarMetaKey]
             }
           }
         }
@@ -360,7 +387,7 @@ export function useCanvasTable({
           f.extra = getUserColOptions(f, baseUsers.value)
         }
 
-        if ([UITypes.DateTime].includes(f.uidt)) {
+        if ([UITypes.LastModifiedTime, UITypes.CreatedTime, UITypes.DateTime].includes(f.uidt)) {
           const meta = parseProp(f.meta)
           f.extra.timezone = isEeUI ? getTimeZoneFromName(meta?.timezone) : undefined
           f.extra.isDisplayTimezone = isEeUI ? meta?.isDisplayTimezone : undefined
@@ -375,7 +402,7 @@ export function useCanvasTable({
             : undefined
 
           if ([UITypes.DateTime].includes(displayType)) {
-            if (displayColumnConfig.meta) {
+            if (displayColumnConfig?.meta) {
               const displayColumnConfigMeta = displayColumnConfig.meta
 
               const extra = {
@@ -406,6 +433,8 @@ export function useCanvasTable({
           !showEditRestrictedColumnTooltip(f) ||
           isAllowed(PermissionEntity.FIELD, f.id, PermissionKey.RECORD_FIELD_EDIT)
 
+        const isSyncedCol = meta.value?.synced && f.readonly
+
         const aggregation = getFormattedAggrationValue(gridViewCol.aggregation, aggregations.value[f.title!], f, [], {
           col: f,
           meta: meta.value as TableType,
@@ -428,7 +457,13 @@ export function useCanvasTable({
               : parseCellWidth(gridViewCol.width) > width.value * (3 / 4)
               ? false
               : !!f.pv,
-          readonly: f.readonly || isDataReadOnly.value || !isDataEditAllowed.value || isPublicView.value || !isCellEditable,
+          readonly:
+            f.readonly ||
+            isDataReadOnly.value ||
+            !isDataEditAllowed.value ||
+            isPublicView.value ||
+            !isCellEditable ||
+            isSyncedCol,
           isCellEditable,
           pv: !!f.pv,
           virtual: isVirtualCol(f),
@@ -438,6 +473,7 @@ export function useCanvasTable({
           columnObj: f,
           relatedColObj,
           relatedTableMeta,
+          isSyncedColumn: isSyncedCol,
           isInvalidColumn: {
             ...isInvalid,
             tooltip: isInvalid.ignoreTooltip ? null : isInvalid.tooltip && t(isInvalid.tooltip),
@@ -521,7 +557,9 @@ export function useCanvasTable({
       (selection.value.isEmpty() && activeCell.value.column && columns.value[activeCell.value.column]?.virtual) ||
       (!selection.value.isEmpty() &&
         Array.from({ length: selection.value.end.col - selection.value.start.col + 1 }).every(
-          (_, i) => !columns.value[selection.value.start.col + i]?.isCellEditable,
+          (_, i) =>
+            !columns.value[selection.value.start.col + i]?.isCellEditable ||
+            columns.value[selection.value.start.col + i]?.isSyncedColumn,
         ))
     )
   })
@@ -561,13 +599,13 @@ export function useCanvasTable({
   const baseColor = computed(() => {
     switch (groupByColumns.value.length) {
       case 1:
-        return '#F9F9FA'
+        return getColor(themeV4Colors.gray['50'])
       case 2:
-        return '#F4F4F5'
+        return getColor(themeV4Colors.gray['100'])
       case 3:
-        return '#E7E7E9'
+        return getColor(themeV4Colors.gray['200'])
       default:
-        return '#F9F9FA'
+        return getColor(themeV4Colors.gray['50'])
     }
   })
 
@@ -667,9 +705,16 @@ export function useCanvasTable({
 
   function getCellPosition(targetColumn: CanvasGridColumn, rowIndex: number, path: Array<number> = []) {
     const yOffset =
-      calculateGroupRowTop(cachedGroups.value, path, rowIndex, rowHeight.value, isAddingEmptyRowAllowed.value) -
+      calculateGroupRowTop(
+        cachedGroups.value,
+        path,
+        rowIndex,
+        rowHeight.value,
+        headerRowHeight.value,
+        isAddingEmptyRowAllowed.value,
+      ) -
       scrollTop.value +
-      COLUMN_HEADER_HEIGHT_IN_PX
+      headerRowHeight.value
     if (targetColumn.fixed) {
       let xOffset = 0
       for (let i = 0; i < columns.value.length; i++) {
@@ -779,10 +824,11 @@ export function useCanvasTable({
         groupPath,
         selection.value.end.row,
         rowHeight.value,
+        headerRowHeight.value,
         isAddingEmptyRowAllowed.value,
       ) -
       scrollTop.value +
-      COLUMN_HEADER_HEIGHT_IN_PX +
+      headerRowHeight.value +
       rowHeight.value
 
     // const startY = -partialRowHeight.value + 33 + (selection.value.end.row - rowSlice.value.start + 1) * rowHeight.value
@@ -798,6 +844,7 @@ export function useCanvasTable({
   const { handleCellClick, renderCell, handleCellHover, handleCellKeyDown } = useGridCellHandler({
     getCellPosition,
     actionManager,
+    markdownLoader,
     updateOrSaveRow,
     makeCellEditable,
     meta,
@@ -821,6 +868,7 @@ export function useCanvasTable({
     totalGroups,
     rowSlice,
     rowHeight,
+    headerRowHeight,
     activeCell,
     dragOver,
     hoverRow,
@@ -830,6 +878,7 @@ export function useCanvasTable({
     isFillMode,
     imageLoader,
     spriteLoader,
+    markdownLoader,
     tableMetaLoader,
     baseRoleLoader,
     partialRowHeight,
@@ -868,6 +917,7 @@ export function useCanvasTable({
     rowMetaColumnWidth,
     rowColouringBorderWidth,
     isRecordSelected,
+    isViewOperationsAllowed,
   })
 
   const { handleDragStart } = useRowReorder({
@@ -1011,6 +1061,7 @@ export function useCanvasTable({
     columns,
     colSlice,
     scrollLeft,
+    isViewOperationsAllowed,
     (columnId, width) =>
       handleColumnWidth(columnId, width, (normalizedWidth) => (gridViewCols.value[columnId]!.width = normalizedWidth)),
     (columnId, width) =>
@@ -1021,72 +1072,81 @@ export function useCanvasTable({
     dragStart: columnDragStart,
     startDrag,
     findColumnAtPosition,
-  } = useColumnReorder(canvasRef, columns, colSlice, scrollLeft, triggerRefreshCanvas, dragOver, (event, fromIndex, toIndex) => {
-    const toBeReorderedCol = columns.value[fromIndex]
-    const toCol = columns.value[toIndex]
-    if (!toBeReorderedCol || !toCol || !meta.value?.columns) return
+  } = useColumnReorder(
+    canvasRef,
+    columns,
+    colSlice,
+    scrollLeft,
+    triggerRefreshCanvas,
+    dragOver,
+    (event, fromIndex, toIndex) => {
+      const toBeReorderedCol = columns.value[fromIndex]
+      const toCol = columns.value[toIndex]
+      if (!toBeReorderedCol || !toCol || !meta.value?.columns) return
 
-    const toBeReorderedViewCol = gridViewCols.value[toBeReorderedCol.id]
-    const toViewCol = gridViewCols.value[toCol.id]
-    if (!toBeReorderedViewCol || !toViewCol) return
+      const toBeReorderedViewCol = gridViewCols.value[toBeReorderedCol.id]
+      const toViewCol = gridViewCols.value[toCol.id]
+      if (!toBeReorderedViewCol || !toViewCol) return
 
-    const nextToColField = toIndex < columns.value.length - 1 ? columns.value[toIndex + 1] : null
-    const nextToViewCol = nextToColField ? gridViewCols.value[nextToColField.id] : null
+      const nextToColField = toIndex < columns.value.length - 1 ? columns.value[toIndex + 1] : null
+      const nextToViewCol = nextToColField ? gridViewCols.value[nextToColField.id] : null
 
-    const lastCol = columns.value[columns.value.length - 1]
-    const lastViewCol = gridViewCols.value[lastCol.id]
+      const lastCol = columns.value[columns.value.length - 1]
+      const lastViewCol = gridViewCols.value[lastCol.id]
 
-    if (nextToViewCol === null && lastViewCol === null) return
+      if (nextToViewCol === null && lastViewCol === null) return
 
-    const newOrder = nextToViewCol ? toViewCol.order + (nextToViewCol.order - toViewCol.order) / 2 : lastViewCol.order + 1
-    const oldOrder = toBeReorderedViewCol.order
+      const newOrder = nextToViewCol ? toViewCol.order + (nextToViewCol.order - toViewCol.order) / 2 : lastViewCol.order + 1
+      const oldOrder = toBeReorderedViewCol.order
 
-    toBeReorderedViewCol.order = newOrder
+      toBeReorderedViewCol.order = newOrder
 
-    if (isDefaultView.value && toBeReorderedViewCol.fk_column_id) {
-      meta.value.columns = (meta.value?.columns ?? [])?.map((c) => {
-        if (c.id !== toBeReorderedViewCol.fk_column_id) return c
-        c.meta = { ...parseProp(c.meta || {}), defaultViewColOrder: newOrder }
-        return c
-      })
+      if (isDefaultView.value && toBeReorderedViewCol.fk_column_id) {
+        meta.value.columns = (meta.value?.columns ?? [])?.map((c) => {
+          if (c.id !== toBeReorderedViewCol.fk_column_id) return c
+          c.meta = { ...parseProp(c.meta || {}), defaultViewColOrder: newOrder }
+          return c
+        })
 
-      if (meta.value?.columnsById?.[toBeReorderedViewCol.fk_column_id]) {
-        meta.value.columnsById[toBeReorderedViewCol.fk_column_id].meta = {
-          ...parseProp(meta.value.columnsById[toBeReorderedViewCol.fk_column_id].meta),
-          defaultViewColOrder: newOrder,
+        if (meta.value?.columnsById?.[toBeReorderedViewCol.fk_column_id]) {
+          meta.value.columnsById[toBeReorderedViewCol.fk_column_id].meta = {
+            ...parseProp(meta.value.columnsById[toBeReorderedViewCol.fk_column_id].meta),
+            defaultViewColOrder: newOrder,
+          }
         }
       }
-    }
 
-    addUndo({
-      undo: {
-        fn: async () => {
-          toBeReorderedViewCol.order = oldOrder
-          if (isDefaultView.value) {
-            updateDefaultViewColumnOrder(toBeReorderedViewCol.fk_column_id, oldOrder)
-          }
-          await updateGridViewColumn(toBeReorderedCol.id, { order: oldOrder })
-          eventBus.emit(SmartsheetStoreEvents.FIELD_RELOAD)
+      addUndo({
+        undo: {
+          fn: async () => {
+            toBeReorderedViewCol.order = oldOrder
+            if (isDefaultView.value) {
+              updateDefaultViewColumnOrder(toBeReorderedViewCol.fk_column_id, oldOrder)
+            }
+            await updateGridViewColumn(toBeReorderedCol.id, { order: oldOrder })
+            eventBus.emit(SmartsheetStoreEvents.FIELD_RELOAD)
+          },
+          args: [],
         },
-        args: [],
-      },
-      redo: {
-        fn: async () => {
-          toBeReorderedViewCol.order = newOrder
-          if (isDefaultView.value) {
-            updateDefaultViewColumnOrder(toBeReorderedViewCol.fk_column_id, newOrder)
-          }
-          await updateGridViewColumn(toBeReorderedCol.id, { order: newOrder })
-          eventBus.emit(SmartsheetStoreEvents.FIELD_RELOAD)
+        redo: {
+          fn: async () => {
+            toBeReorderedViewCol.order = newOrder
+            if (isDefaultView.value) {
+              updateDefaultViewColumnOrder(toBeReorderedViewCol.fk_column_id, newOrder)
+            }
+            await updateGridViewColumn(toBeReorderedCol.id, { order: newOrder })
+            eventBus.emit(SmartsheetStoreEvents.FIELD_RELOAD)
+          },
+          args: [],
         },
-        args: [],
-      },
-      scope: defineViewScope({ view: activeView.value }),
-    })
+        scope: defineViewScope({ view: activeView.value }),
+      })
 
-    updateGridViewColumn(toBeReorderedCol.id, { order: newOrder }, true)
-    eventBus.emit(SmartsheetStoreEvents.FIELD_RELOAD)
-  })
+      updateGridViewColumn(toBeReorderedCol.id, { order: newOrder }, true)
+      eventBus.emit(SmartsheetStoreEvents.FIELD_RELOAD)
+    },
+    isViewOperationsAllowed,
+  )
 
   useKeyboardNavigation({
     activeCell,
@@ -1145,7 +1205,7 @@ export function useCanvasTable({
     for (const row of rows) {
       for (const col of cols) {
         const colObj = col.columnObj
-        if (!row || !colObj || !colObj.title || !col.isCellEditable) continue
+        if (!row || !colObj || !colObj.title || !col.isCellEditable || col.isSyncedColumn) continue
 
         if (isVirtualCol(colObj)) {
           if ((isBt(colObj) || isOo(colObj) || isMm(colObj)) && !isInfoShown) {
@@ -1163,6 +1223,11 @@ export function useCanvasTable({
         row.row[colObj.title] = null
         props.push(colObj.title)
       }
+    }
+
+    if (props.length === 0) {
+      message.info(t('msg.info.noEditableCellsToClear'))
+      return
     }
 
     await bulkUpdateRows(rows, props, undefined, false, path)
@@ -1210,8 +1275,14 @@ export function useCanvasTable({
     if (isGroupBy.value && !path && !path?.legth) return
 
     const yOffset =
-      calculateGroupRowTop(cachedGroups.value, path, rowIndex, rowHeight.value, isAddingEmptyRowAllowed.value) +
-      COLUMN_HEADER_HEIGHT_IN_PX
+      calculateGroupRowTop(
+        cachedGroups.value,
+        path,
+        rowIndex,
+        rowHeight.value,
+        headerRowHeight.value,
+        isAddingEmptyRowAllowed.value,
+      ) + headerRowHeight.value
 
     let xOffset = (groupByColumns.value?.length ?? 0) * 13
     const columnIndex = columns.value.findIndex((col) => col.id === clickedColumn.id)
@@ -1249,6 +1320,7 @@ export function useCanvasTable({
       fixed: clickedColumn.fixed,
       path,
       isCellEditable: clickedColumn.isCellEditable,
+      isSyncedColumn: clickedColumn.isSyncedColumn,
     }
     hideTooltip()
     return true
@@ -1287,6 +1359,11 @@ export function useCanvasTable({
     const isSystemCol = isSystemColumn(column) && !isLinksOrLTAR(column)
 
     if (!isDataEditAllowed.value || editEnabled.value || readOnly.value || isSystemCol) {
+      return null
+    }
+
+    if (clickedColumn.isSyncedColumn) {
+      message.toast(t('msg.info.syncedFieldsAreNotEditable'))
       return null
     }
 
@@ -1347,13 +1424,20 @@ export function useCanvasTable({
     triggerRefreshCanvas()
   })
 
-  eventBus.on((event) => {
+  const smartsheetEventHandler = (event) => {
     if ([SmartsheetStoreEvents.TRIGGER_RE_RENDER, SmartsheetStoreEvents.ON_ROW_COLOUR_INFO_UPDATE].includes(event)) {
       forcedNextTick(() => {
         clearRowColouringCache()
         triggerRefreshCanvas()
       })
     }
+  }
+
+  eventBus.on(smartsheetEventHandler)
+
+  onBeforeUnmount(() => {
+    actionManager.releaseEventListeners()
+    eventBus.off(smartsheetEventHandler)
   })
 
   // load metas and refresh canvas
@@ -1362,18 +1446,32 @@ export function useCanvasTable({
     async () => {
       if (!fetchMetaIds.value.length) return
 
-      await Promise.all(
-        fetchMetaIds.value.map(async ([colId, tableId]) => {
-          try {
-            await getMeta(tableId, false, false, undefined, true)
-          } catch {}
-          if (!metas.value[tableId]) {
-            await getPartialMeta(colId, tableId)
-          }
-        }),
-      )
+      // Prevent concurrent executions that could cause infinite loops
+      if (isLoadingMetas.value) return
+
+      isLoadingMetas.value = true
+
+      // Copy the current fetch list and clear it immediately to prevent re-triggering
+      const metaIdsToFetch = [...fetchMetaIds.value]
       fetchMetaIds.value = []
-      triggerRefreshCanvas()
+
+      try {
+        await Promise.all(
+          metaIdsToFetch.map(async ([colId, tableId, relatedBaseId]) => {
+            if (!tableId || !relatedBaseId) return
+            try {
+              await getMeta(relatedBaseId, tableId, false, false, true)
+            } catch {}
+            const metaKey = `${relatedBaseId}:${tableId}`
+            if (!metas.value[metaKey]) {
+              await getPartialMeta(relatedBaseId, colId, tableId)
+            }
+          }),
+        )
+        triggerRefreshCanvas()
+      } finally {
+        isLoadingMetas.value = false
+      }
     },
   )
 
@@ -1383,6 +1481,7 @@ export function useCanvasTable({
     activeCell,
     editEnabled,
     rowHeight,
+    headerRowHeight,
     totalWidth,
     columnWidths,
     columns,
@@ -1473,6 +1572,7 @@ export function useCanvasTable({
     // Action Manager
     actionManager,
     imageLoader,
+    markdownLoader,
     baseRoleLoader,
     handleCellClick,
     handleCellHover,
@@ -1490,5 +1590,6 @@ export function useCanvasTable({
     rowMetaColumnWidth,
     isRowColouringEnabled,
     rowColouringBorderWidth,
+    isViewOperationsAllowed,
   }
 }

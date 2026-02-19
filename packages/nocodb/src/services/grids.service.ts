@@ -35,6 +35,36 @@ export class GridsService {
       param.grid,
     );
 
+    if (context.schema_locked) {
+      NcError.get(context).schemaLocked(
+        'Schema modifications are not allowed on installed sandbox bases',
+      );
+    }
+
+    const model = await Model.get(context, param.tableId, ncMeta);
+
+    // check for duplicated view title
+    param.grid.title = param.grid.title?.trim();
+    const existingView = await View.getByTitleOrId(
+      context,
+      {
+        titleOrId: param.grid.title,
+        fk_model_id: param.tableId,
+      },
+      ncMeta,
+    );
+    if (existingView) {
+      NcError.get(context).duplicateAlias({
+        type: 'view',
+        alias: param.grid.title,
+        label: 'title',
+        base: context.base_id,
+        additionalTrace: {
+          table: param.tableId,
+        },
+      });
+    }
+
     const viewWebhookManager =
       param.viewWebhookManager ??
       (
@@ -42,8 +72,6 @@ export class GridsService {
           param.tableId,
         )
       ).forCreate();
-
-    const model = await Model.get(context, param.tableId, ncMeta);
 
     const { id } = await View.insertMetaOnly(
       context,
@@ -67,6 +95,7 @@ export class GridsService {
     // populate  cache and add to list since the list cache already exist
     const view = await View.get(context, id, ncMeta);
     await NocoCache.appendToList(
+      context,
       CacheScope.VIEW,
       [view.fk_model_id],
       `${CacheScope.VIEW}:${id}`,

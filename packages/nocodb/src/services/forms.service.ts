@@ -44,6 +44,12 @@ export class FormsService {
       param.body,
     );
 
+    if (context.schema_locked) {
+      NcError.get(context).schemaLocked(
+        'Schema modifications are not allowed on installed sandbox bases',
+      );
+    }
+
     const model = await Model.get(context, param.tableId, ncMeta);
 
     if (model.synced) {
@@ -56,9 +62,29 @@ export class FormsService {
     const source = await Source.get(context, model.source_id);
 
     if (source.is_data_readonly) {
-      NcError.sourceDataReadOnly(source.alias);
+      NcError.get(context).sourceDataReadOnly(source.alias);
     }
 
+    param.body.title = param.body.title?.trim();
+    const existingView = await View.getByTitleOrId(
+      context,
+      {
+        titleOrId: param.body.title,
+        fk_model_id: param.tableId,
+      },
+      ncMeta,
+    );
+    if (existingView) {
+      NcError.get(context).duplicateAlias({
+        type: 'view',
+        alias: param.body.title,
+        label: 'title',
+        base: context.base_id,
+        additionalTrace: {
+          table: param.tableId,
+        },
+      });
+    }
     const viewWebhookManager =
       param.viewWebhookManager ??
       (
@@ -88,6 +114,7 @@ export class FormsService {
     // populate  cache and add to list since the list cache already exist
     const view = await View.get(context, id, ncMeta);
     await NocoCache.appendToList(
+      context,
       CacheScope.VIEW,
       [view.fk_model_id],
       `${CacheScope.VIEW}:${id}`,
@@ -145,7 +172,7 @@ export class FormsService {
     const view = await View.get(context, param.formViewId, ncMeta);
 
     if (!view) {
-      NcError.viewNotFound(param.formViewId);
+      NcError.get(context).viewNotFound(param.formViewId);
     }
 
     const viewWebhookManager =

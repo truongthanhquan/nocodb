@@ -1,5 +1,6 @@
 import { Injectable } from '@nestjs/common';
 import { AppEvents, EventType } from 'nocodb-sdk';
+import Noco from 'src/Noco';
 import type { SortReqType } from 'nocodb-sdk';
 import type { NcContext, NcRequest } from '~/interface/config';
 import type { MetaService } from '~/meta/meta.service';
@@ -28,28 +29,39 @@ export class SortsService {
       req: NcRequest;
       viewWebhookManager?: ViewWebhookManager;
     },
+    ncMeta = Noco.ncMeta,
   ) {
-    const sort = await Sort.get(context, param.sortId);
+    if (context.schema_locked) {
+      NcError.get(context).schemaLocked(
+        'Schema modifications are not allowed on installed sandbox bases',
+      );
+    }
+
+    const sort = await Sort.get(context, param.sortId, ncMeta);
 
     if (!sort) {
       NcError.badRequest('Sort not found');
     }
 
-    const column = await Column.get(context, { colId: sort.fk_column_id });
+    const column = await Column.get(
+      context,
+      { colId: sort.fk_column_id },
+      ncMeta,
+    );
 
-    const view = await View.get(context, sort.fk_view_id);
+    const view = await View.get(context, sort.fk_view_id, ncMeta);
 
     const viewWebhookManager =
       param.viewWebhookManager ??
       (
         await (
-          await new ViewWebhookManagerBuilder(context).withModelId(
+          await new ViewWebhookManagerBuilder(context, ncMeta).withModelId(
             view.fk_model_id,
           )
         ).withViewId(view.id)
       ).forUpdate();
 
-    await Sort.delete(context, param.sortId);
+    await Sort.delete(context, param.sortId, ncMeta);
 
     this.appHooksService.emit(AppEvents.SORT_DELETE, {
       sort,
@@ -86,30 +98,41 @@ export class SortsService {
       req: NcRequest;
       viewWebhookManager?: ViewWebhookManager;
     },
+    ncMeta = Noco.ncMeta,
   ) {
+    if (context.schema_locked) {
+      NcError.get(context).schemaLocked(
+        'Schema modifications are not allowed on installed sandbox bases',
+      );
+    }
+
     validatePayload('swagger.json#/components/schemas/SortReq', param.sort);
 
-    const sort = await Sort.get(context, param.sortId);
+    const sort = await Sort.get(context, param.sortId, ncMeta);
 
     if (!sort) {
       NcError.badRequest('Sort not found');
     }
 
-    const column = await Column.get(context, { colId: sort.fk_column_id });
+    const column = await Column.get(
+      context,
+      { colId: sort.fk_column_id },
+      ncMeta,
+    );
 
-    const view = await View.get(context, sort.fk_view_id);
+    const view = await View.get(context, sort.fk_view_id, ncMeta);
 
     const viewWebhookManager =
       param.viewWebhookManager ??
       (
         await (
-          await new ViewWebhookManagerBuilder(context).withModelId(
+          await new ViewWebhookManagerBuilder(context, ncMeta).withModelId(
             view.fk_model_id,
           )
         ).withViewId(view.id)
       ).forUpdate();
 
-    const res = await Sort.update(context, param.sortId, param.sort);
+    const res = await Sort.update(context, param.sortId, param.sort, ncMeta);
 
     this.appHooksService.emit(AppEvents.SORT_UPDATE, {
       sort: {
@@ -154,6 +177,11 @@ export class SortsService {
     },
     ncMeta?: MetaService,
   ) {
+    if (context.schema_locked) {
+      NcError.get(context).schemaLocked(
+        'Schema modifications are not allowed on installed sandbox bases',
+      );
+    }
     validatePayload('swagger.json#/components/schemas/SortReq', param.sort);
 
     const view = await View.get(context, param.viewId, ncMeta);

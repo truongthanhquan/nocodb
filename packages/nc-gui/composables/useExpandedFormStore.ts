@@ -22,6 +22,13 @@ import {
 import type { Ref } from 'vue'
 import dayjs from 'dayjs'
 
+interface AuditTypeExtended extends AuditType {
+  created_display_name?: string
+  created_display_name_short?: string
+  created_by_email?: string
+  created_by_meta?: MetaType
+}
+
 const [useProvideExpandedFormStore, useExpandedFormStore] = useInjectionState(
   (
     meta: Ref<TableType>,
@@ -36,15 +43,7 @@ const [useProvideExpandedFormStore, useExpandedFormStore] = useInjectionState(
 
     const isPublic = inject(IsPublicInj, ref(false))
 
-    const audits = ref<
-      Array<
-        AuditType & {
-          created_display_name?: string
-          created_by_email?: string
-          created_by_meta?: MetaType
-        }
-      >
-    >([])
+    const audits = ref<Array<AuditTypeExtended>>([])
 
     const isAuditLoading = ref(false)
 
@@ -120,7 +119,7 @@ const [useProvideExpandedFormStore, useExpandedFormStore] = useInjectionState(
       }
     })
 
-    const { fieldsMap, isLocalMode, showSystemFields } = useViewColumnsOrThrow()
+    const { fieldsMap, isLocalMode, showSystemFields, hasViewFieldDataEditPermission } = useViewColumnsOrThrow()
 
     const isHiddenColumnInNewRecord = (col: ColumnType) => {
       return isReadOnlyColumn(col) || isAIPromptCol(col)
@@ -190,10 +189,13 @@ const [useProvideExpandedFormStore, useExpandedFormStore] = useInjectionState(
           !isHiddenCol(col, meta.value ?? {}) &&
           (!useMetaFields || !isSystemColumn(col)) &&
           !fields.value?.includes(col) &&
-          (isLocalMode.value && col?.id && fieldsMap.value[col.id] ? fieldsMap.value[col.id]?.initialShow : true) &&
+          (isLocalMode.value && !hasViewFieldDataEditPermission.value && col?.id && fieldsMap.value[col.id]
+            ? fieldsMap.value[col.id]?.initialShow
+            : true) &&
           // exclude readonly fields from hidden fields if new record creation
           (!rowStore.isNew.value || !isHiddenColumnInNewRecord(col)),
       )
+
       if (useMetaFields) {
         return maintainDefaultViewOrder.value
           ? _hiddenFields.sort((a, b) => {
@@ -269,7 +271,8 @@ const [useProvideExpandedFormStore, useExpandedFormStore] = useInjectionState(
             const user = baseUsers.value.find((u) => u.id === audit.fk_user_id || u.email === audit.user)
             return {
               ...audit,
-              created_display_name: user?.display_name ?? (user?.email ?? '').split('@')[0],
+              created_display_name: user?.display_name,
+              created_display_name_short: user?.display_name ?? extractNameFromEmail(user?.email),
               created_by_email: user?.email,
               created_by_meta: user?.meta,
             }
@@ -279,7 +282,7 @@ const [useProvideExpandedFormStore, useExpandedFormStore] = useInjectionState(
         console.error(e)
         const errorInfo = await extractSdkResponseErrorMsgv2(e)
 
-        if (isPaymentEnabled.value && errorInfo.error === NcErrorType.PLAN_LIMIT_EXCEEDED) {
+        if (isPaymentEnabled.value && errorInfo.error === NcErrorType.ERR_PLAN_LIMIT_EXCEEDED) {
           const details = errorInfo.details as PlanLimitExceededDetailsType
 
           handleUpgradePlan({
@@ -771,6 +774,7 @@ const [useProvideExpandedFormStore, useExpandedFormStore] = useInjectionState(
       const adts = [...consolidatedAudits.value].map((it) => ({
         user: it.user,
         displayName: it.created_display_name,
+        displayNameShort: it.created_display_name_short,
         created_at: it.created_at,
         type: 'audit',
         audit: it,
@@ -780,6 +784,7 @@ const [useProvideExpandedFormStore, useExpandedFormStore] = useInjectionState(
         ...it,
         user: it.created_by_email,
         displayName: it.created_display_name,
+        displayNameShort: it.created_display_name_short,
         type: 'comment',
       }))
 
@@ -869,7 +874,8 @@ const [useProvideExpandedFormStore, useExpandedFormStore] = useInjectionState(
                 const user = baseUsers.value.find((u) => u.id === payload.created_by)
                 const finalPayload = {
                   ...payload,
-                  created_display_name: user?.display_name ?? (user?.email ?? '').split('@')[0],
+                  created_display_name: user?.display_name,
+                  created_display_name_short: user?.display_name ?? extractNameFromEmail(user?.email),
                   created_by_email: user?.email,
                   created_by_meta: user?.meta,
                 }

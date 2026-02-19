@@ -16,16 +16,11 @@ useSidebar('nc-right-sidebar')
 
 const { isUIAllowed } = useRoles()
 
-const { metas, getMeta } = useMetas()
+const { getMeta, getMetaByKey } = useMetas()
 
 const { ncNavigateTo } = useGlobal()
 
 const route = useRoute()
-
-const meta = computed<TableType | undefined>(() => {
-  const viewId = route.params.viewId as string
-  return viewId && metas.value[viewId]
-})
 
 const { handleSidebarOpenOnMobileForNonViews } = useConfigStore()
 const { activeTableId } = storeToRefs(useTablesStore())
@@ -37,6 +32,12 @@ const { activeWorkspaceId } = storeToRefs(useWorkspace())
 const viewStore = useViewsStore()
 
 const { activeView, openedViewsTab, activeViewTitleOrId, isViewsLoading } = storeToRefs(viewStore)
+
+const meta = computed<TableType | undefined>(() => {
+  const viewId = route.params.viewId as string
+  return viewId && getMetaByKey(activeProjectId.value, viewId)
+})
+
 const { isGallery, isGrid, isForm, isKanban, isLocked, isMap, isCalendar, xWhere, eventBus } = useProvideSmartsheetStore(
   activeView,
   meta,
@@ -96,6 +97,18 @@ const extensionPaneRef = ref()
 
 const actionPaneRef = ref()
 
+/*
+ * NOTE:
+ * Splitpanes internally schedules async resize/redo logic.
+ * If the component is mounted/unmounted quickly (route change, fullscreen toggle),
+ * those callbacks can run after unmount and crash with:
+ * "Cannot read properties of null (reading 'children')".
+ *
+ * We delay rendering Splitpanes until the parent component is fully mounted
+ * and show a loader meanwhile to ensure DOM stability.
+ */
+const { isMounted } = useIsMounted()
+
 const onDrop = async (event: DragEvent) => {
   event.preventDefault()
   try {
@@ -109,8 +122,8 @@ const onDrop = async (event: DragEvent) => {
     // if dragged item or opened view is not a table, return
     if (data.type !== 'table' || meta.value?.type !== 'table') return
 
-    const childMeta = await getMeta(data.id)
-    const parentMeta = metas.value[meta.value.id!]
+    const childMeta = await getMeta(meta.value.base_id!, data.id)
+    const parentMeta = getMetaByKey(activeProjectId.value, meta.value.id!)
 
     if (!childMeta || !parentMeta) return
 
@@ -234,6 +247,7 @@ const onReady = () => {
 const checkIfViewExists = async () => {
   await until(() => isViewsLoading.value).toBe(false)
   const views = await viewStore.loadViews({
+    baseId: activeProjectId.value,
     ignoreLoading: true,
   })
 
@@ -268,7 +282,9 @@ watch(isViewsLoading, async () => {
     <SmartsheetTopbar v-if="!isFullScreen" />
     <div style="height: calc(100% - var(--topbar-height))">
       <NcFullScreen v-if="openedViewsTab === 'view'" v-model="isFullScreen" class="h-full" :page-only="true">
+        <!-- Splitpanes is conditionally rendered only after mount to avoid race conditions with its internal async resize logic. -->
         <Splitpanes
+          v-if="isMounted"
           class="nc-extensions-content-resizable-wrapper"
           :class="{
             'nc-is-open-extensions': isPanelExpanded,
@@ -279,21 +295,21 @@ watch(isViewsLoading, async () => {
           @resized="onResized"
         >
           <Pane class="flex flex-col h-full min-w-0" :max-size="contentMaxSize" :size="contentSize">
-            <SmartsheetToolbar v-if="!isForm" show-full-screen-toggle />
+            <LazySmartsheetToolbar v-if="!isForm" show-full-screen-toggle />
             <div :style="{ height: isForm ? '100%' : 'calc(100% - var(--toolbar-height))' }" class="flex flex-row w-full">
               <Transition name="layout" mode="out-in">
                 <div v-if="openedViewsTab === 'view'" class="flex flex-1 min-h-0 w-3/4">
                   <div class="h-full flex-1 min-w-0 min-h-0 bg-nc-bg-default">
-                    <SmartsheetGrid v-if="isGrid || !meta || !activeView" ref="grid" />
+                    <LazySmartsheetGrid v-if="isGrid || !meta || !activeView" ref="grid" />
 
                     <template v-if="activeView && meta">
-                      <SmartsheetGallery v-if="isGallery" />
+                      <LazySmartsheetGallery v-if="isGallery" />
 
-                      <SmartsheetForm v-else-if="isForm && !$route.query.reload" />
+                      <LazySmartsheetForm v-else-if="isForm && !$route.query.reload" />
 
-                      <SmartsheetKanban v-else-if="isKanban" />
+                      <SmartsheetKanbanWrapper v-else-if="isKanban" />
 
-                      <SmartsheetCalendar v-else-if="isCalendar" />
+                      <LazySmartsheetCalendar v-else-if="isCalendar" />
 
                       <LazySmartsheetMap v-else-if="isMap" />
                     </template>
@@ -302,12 +318,15 @@ watch(isViewsLoading, async () => {
               </Transition>
             </div>
           </Pane>
-          <ExtensionsPane v-if="isPanelExpanded" ref="extensionPaneRef" />
-          <ActionsPane v-if="isActionPanelExpanded" ref="actionPaneRef" />
+          <LazyExtensionsPane v-if="isPanelExpanded" ref="extensionPaneRef" />
+          <LazyActionsPane v-if="isActionPanelExpanded" ref="actionPaneRef" />
         </Splitpanes>
+        <div v-else class="flex items-center justify-center h-full w-full">
+          <a-spin size="large" />
+        </div>
       </NcFullScreen>
 
-      <SmartsheetDetails v-else />
+      <LazySmartsheetDetails v-else />
     </div>
     <LazySmartsheetExpandedFormDetached />
     <DetachedExpandedText />
